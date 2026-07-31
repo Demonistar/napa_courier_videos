@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 
+// ─── Data Types ────────────────────────────────────────────────────────────────
+
 export interface Location {
   id: string;
   state: string;
@@ -9,6 +11,7 @@ export interface Location {
   videoUrl: string | null;
   imageUrl: string | null;
   instructions: string;
+  // Reserved for future Dropbox sync — intentionally null for now
   syncSource: string | null;
   lastVerified: string | null;
   createdAt: string;
@@ -32,7 +35,51 @@ export interface AppState {
   currentUser: string;
 }
 
+export interface BackupEntry {
+  id: string;
+  timestamp: string;
+  /** Human-readable description of what change this snapshot can undo */
+  label: string;
+  /** Number of locations in this snapshot */
+  locationCount: number;
+  snapshot: AppState;
+}
+
+// ─── Storage Keys ──────────────────────────────────────────────────────────────
+
 const STORAGE_KEY = 'napa-courier-admin-state';
+const BACKUP_KEY = 'napa-courier-admin-backups';
+const MAX_BACKUPS = 20;
+
+// ─── Backup Helpers ────────────────────────────────────────────────────────────
+
+export function getBackups(): BackupEntry[] {
+  try {
+    const stored = localStorage.getItem(BACKUP_KEY);
+    return stored ? (JSON.parse(stored) as BackupEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushBackup(label: string, snapshot: AppState): void {
+  try {
+    const existing = getBackups();
+    const entry: BackupEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      label,
+      locationCount: snapshot.locations.length,
+      snapshot,
+    };
+    const updated = [entry, ...existing].slice(0, MAX_BACKUPS);
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(updated));
+  } catch {
+    // Silently ignore storage errors (quota exceeded, etc.)
+  }
+}
+
+// ─── Seed Data ─────────────────────────────────────────────────────────────────
 
 const seedData: Location[] = [
   {
@@ -163,13 +210,15 @@ const seedData: Location[] = [
   },
 ];
 
+// ─── State Init ────────────────────────────────────────────────────────────────
+
 function getInitialState(): AppState {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
-      return JSON.parse(stored);
+      return JSON.parse(stored) as AppState;
     } catch {
-      // Fall through to default
+      // Fall through to seed
     }
   }
   return {
@@ -177,29 +226,43 @@ function getInitialState(): AppState {
     publishedLocations: seedData,
     pendingPublish: false,
     auditLog: [],
-    currentUser: 'Admin',
+    currentUser: 'Unknown user',
   };
 }
+
+// ─── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useLocationStore() {
   const [state, setState] = useState<AppState>(getInitialState);
 
+  // Persist state to localStorage on every change
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
+  // ── Identity ──────────────────────────────────────────────────────────────
+
+  const setCurrentUser = (username: string) => {
+    setState((prev) => ({ ...prev, currentUser: username }));
+  };
+
+  // ── Audit ─────────────────────────────────────────────────────────────────
+
   const createAuditEntry = (
     locationId: string,
     action: 'create' | 'update' | 'delete',
-    diff: Record<string, { before: unknown; after: unknown }>
+    diff: Record<string, { before: unknown; after: unknown }>,
+    user: string,
   ): AuditEntry => ({
     id: crypto.randomUUID(),
     locationId,
     action,
-    changedBy: state.currentUser,
+    changedBy: user,
     changedAt: new Date().toISOString(),
     diff,
   });
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
 
   const addLocation = (location: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>) => {
     const now = new Date().toISOString();
@@ -210,16 +273,24 @@ export function useLocationStore() {
       updatedAt: now,
     };
 
-    const auditEntry = createAuditEntry(newLocation.id, 'create', {
-      location: { before: null, after: newLocation },
-    });
+    setState((prev) => {
+      // Snapshot BEFORE the change
+      pushBackup(`Undo: Add "${newLocation.siteName}"`, prev);
 
-    setState((prev) => ({
-      ...prev,
-      locations: [...prev.locations, newLocation],
-      auditLog: [...prev.auditLog, auditEntry],
-      pendingPublish: true,
-    }));
+      const auditEntry = createAuditEntry(
+        newLocation.id,
+        'create',
+        { location: { before: null, after: newLocation } },
+        prev.currentUser,
+      );
+
+      return {
+        ...prev,
+        locations: [...prev.locations, newLocation],
+        auditLog: [...prev.auditLog, auditEntry],
+        pendingPublish: true,
+      };
+    });
 
     return newLocation;
   };
@@ -230,22 +301,24 @@ export function useLocationStore() {
       if (!oldLocation) return prev;
 
       const diff: Record<string, { before: unknown; after: unknown }> = {};
-      Object.keys(updates).forEach((key) => {
-        const k = key as keyof Location;
-        if (updates[k] !== oldLocation[k]) {
-          diff[key] = { before: oldLocation[k], after: updates[k] };
+      (Object.keys(updates) as (keyof Location)[]).forEach((key) => {
+        if (updates[key] !== oldLocation[key]) {
+          diff[key] = { before: oldLocation[key], after: updates[key] };
         }
       });
 
       if (Object.keys(diff).length === 0) return prev;
 
-      const updatedLocation = {
+      // Snapshot BEFORE the change
+      pushBackup(`Undo: Edit "${oldLocation.siteName}"`, prev);
+
+      const updatedLocation: Location = {
         ...oldLocation,
         ...updates,
         updatedAt: new Date().toISOString(),
       };
 
-      const auditEntry = createAuditEntry(id, 'update', diff);
+      const auditEntry = createAuditEntry(id, 'update', diff, prev.currentUser);
 
       return {
         ...prev,
@@ -261,9 +334,15 @@ export function useLocationStore() {
       const location = prev.locations.find((loc) => loc.id === id);
       if (!location) return prev;
 
-      const auditEntry = createAuditEntry(id, 'delete', {
-        location: { before: location, after: null },
-      });
+      // Snapshot BEFORE the change
+      pushBackup(`Undo: Delete "${location.siteName}"`, prev);
+
+      const auditEntry = createAuditEntry(
+        id,
+        'delete',
+        { location: { before: location, after: null } },
+        prev.currentUser,
+      );
 
       return {
         ...prev,
@@ -274,18 +353,46 @@ export function useLocationStore() {
     });
   };
 
+  // ── Publish ───────────────────────────────────────────────────────────────
+
   const publish = () => {
-    setState((prev) => ({
-      ...prev,
-      publishedLocations: prev.locations,
-      pendingPublish: false,
-    }));
+    setState((prev) => {
+      pushBackup('Undo: Publish to Live', prev);
+      return {
+        ...prev,
+        publishedLocations: prev.locations,
+        pendingPublish: false,
+      };
+    });
   };
+
+  // ── Backup & Restore ──────────────────────────────────────────────────────
+
+  const restoreBackup = (backupId: string) => {
+    const backups = getBackups();
+    const target = backups.find((b) => b.id === backupId);
+    if (!target) return false;
+
+    // Snapshot current state before restoring
+    setState((prev) => {
+      pushBackup(`Undo: Restore to "${target.label.replace('Undo: ', '')}"`, prev);
+      return target.snapshot;
+    });
+
+    return true;
+  };
+
+  // ── Export ────────────────────────────────────────────────────────────────
 
   const exportData = () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const filename = `napa-courier-locations-${timestamp}.json`;
-    const json = JSON.stringify(state, null, 2);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      state,
+      backups: getBackups(),
+    };
+    const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -295,9 +402,7 @@ export function useLocationStore() {
     URL.revokeObjectURL(url);
   };
 
-  const setCurrentUser = (username: string) => {
-    setState((prev) => ({ ...prev, currentUser: username }));
-  };
+  // ── History ───────────────────────────────────────────────────────────────
 
   const getAuditHistory = (locationId: string, limit = 5): AuditEntry[] => {
     return state.auditLog
@@ -315,5 +420,7 @@ export function useLocationStore() {
     exportData,
     setCurrentUser,
     getAuditHistory,
+    restoreBackup,
+    getBackups,
   };
 }

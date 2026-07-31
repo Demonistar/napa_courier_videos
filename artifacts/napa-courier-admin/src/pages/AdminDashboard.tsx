@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { useLocationStore } from '@/lib/store';
+import { useLocationStore, getBackups, type BackupEntry } from '@/lib/store';
 import { TopBar } from '@/components/layout/TopBar';
 import { LocationTree } from '@/components/tree/LocationTree';
 import { LocationDetail } from '@/components/detail/LocationDetail';
@@ -28,6 +28,9 @@ import {
 import { TourOverlay } from '@/components/tutorial/TourOverlay';
 import { useTour, tourSteps } from '@/components/tutorial/useTour';
 import { useToast } from '@/hooks/use-toast';
+import { useDropboxUser } from '@/hooks/use-dropbox-user';
+import { SettingsPanel } from '@/components/settings/SettingsPanel';
+import { BackupRestore } from '@/components/backup/BackupRestore';
 
 type ViewMode = 'default' | 'add' | 'modify';
 
@@ -40,25 +43,49 @@ export default function AdminDashboard() {
     publish,
     exportData,
     getAuditHistory,
+    setCurrentUser,
+    restoreBackup,
   } = useLocationStore();
+
+  const { user: dropboxUser, disconnect: dropboxDisconnect, refresh: dropboxRefresh } = useDropboxUser();
+
+  // Sync Dropbox identity into the store's currentUser
+  useEffect(() => {
+    if (dropboxUser.connected && dropboxUser.name) {
+      setCurrentUser(dropboxUser.name);
+    }
+  }, [dropboxUser.connected, dropboxUser.name]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('default');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backups, setBackups] = useState<BackupEntry[]>([]);
+
   const { isTourActive, startTour, endTour } = useTour();
   const { toast } = useToast();
 
   const selectedLocation = useMemo(
     () => state.locations.find((loc) => loc.id === selectedLocationId) || null,
-    [state.locations, selectedLocationId]
+    [state.locations, selectedLocationId],
   );
 
   const auditHistory = useMemo(
     () => (selectedLocationId ? getAuditHistory(selectedLocationId) : []),
-    [selectedLocationId, getAuditHistory]
+    [selectedLocationId, getAuditHistory],
   );
+
+  // Refresh backups list whenever the backup panel opens (or mutations happen)
+  useEffect(() => {
+    if (backupOpen) {
+      setBackups(getBackups());
+    }
+  }, [backupOpen, state.locations, state.auditLog]);
+
+  // ── Location actions ──────────────────────────────────────────────────────
 
   const handleAddLocation = () => {
     setViewMode('add');
@@ -66,15 +93,11 @@ export default function AdminDashboard() {
   };
 
   const handleModifyLocation = () => {
-    if (selectedLocationId) {
-      setViewMode('modify');
-    }
+    if (selectedLocationId) setViewMode('modify');
   };
 
   const handleDeleteLocation = () => {
-    if (selectedLocationId) {
-      setDeleteDialogOpen(true);
-    }
+    if (selectedLocationId) setDeleteDialogOpen(true);
   };
 
   const confirmDelete = () => {
@@ -82,10 +105,7 @@ export default function AdminDashboard() {
       deleteLocation(selectedLocationId);
       setSelectedLocationId(null);
       setDeleteDialogOpen(false);
-      toast({
-        title: 'Location deleted',
-        description: 'The location has been removed from the staging layer.',
-      });
+      toast({ title: 'Location deleted', description: 'Removed from staging layer.' });
     }
   };
 
@@ -93,43 +113,47 @@ export default function AdminDashboard() {
     if (viewMode === 'add') {
       const newLocation = addLocation(data);
       setSelectedLocationId(newLocation.id);
-      toast({
-        title: 'Location created',
-        description: `${data.siteName} has been added to the staging layer.`,
-      });
+      toast({ title: 'Location added', description: `${data.siteName} added to staging.` });
     } else if (viewMode === 'modify' && selectedLocationId) {
       updateLocation(selectedLocationId, data);
-      toast({
-        title: 'Location updated',
-        description: 'Changes saved to staging layer.',
-      });
+      toast({ title: 'Location updated', description: 'Changes saved to staging.' });
     }
     setViewMode('default');
   };
 
-  const handleCancelForm = () => {
-    setViewMode('default');
-  };
+  const handleCancelForm = () => setViewMode('default');
 
-  const handlePublish = () => {
-    setPublishDialogOpen(true);
-  };
+  // ── Publish ───────────────────────────────────────────────────────────────
+
+  const handlePublish = () => setPublishDialogOpen(true);
 
   const confirmPublish = () => {
     publish();
     setPublishDialogOpen(false);
-    toast({
-      title: 'Published successfully',
-      description: 'All changes are now live for drivers.',
-    });
+    toast({ title: 'Published', description: 'All changes are now live for drivers.' });
   };
 
+  // ── Backup restore ────────────────────────────────────────────────────────
+
+  const handleRestore = (backupId: string) => {
+    const success = restoreBackup(backupId);
+    if (success) {
+      setSelectedLocationId(null);
+      setViewMode('default');
+      setBackups(getBackups());
+      toast({ title: 'Restored', description: 'Database rolled back to the selected snapshot.' });
+    }
+    return success;
+  };
+
+  // ── Pending count ─────────────────────────────────────────────────────────
+
   const pendingChangesCount = state.pendingPublish
-    ? state.locations.length - state.publishedLocations.length || 1
+    ? Math.max(1, state.locations.length - state.publishedLocations.length)
     : 0;
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-screen bg-background overflow-hidden">
       <TopBar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -138,11 +162,14 @@ export default function AdminDashboard() {
         onExport={exportData}
         currentUser={state.currentUser}
         onStartTour={startTour}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenBackup={() => setBackupOpen(true)}
+        dropboxUser={dropboxUser}
       />
 
       <div className="flex-1 overflow-hidden">
         <PanelGroup direction="horizontal">
-          {/* Left Panel - Location Tree */}
+          {/* ── Left Panel — Location Tree ──────────────────────────── */}
           <Panel defaultSize={25} minSize={15} maxSize={40}>
             <div className="h-full border-r bg-card" data-tour-id="location-tree">
               <LocationTree
@@ -160,21 +187,19 @@ export default function AdminDashboard() {
 
           <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
 
-          {/* Right Panel - Detail and Actions */}
+          {/* ── Right Panel — Detail + Actions ─────────────────────── */}
           <Panel defaultSize={75} minSize={60}>
             <PanelGroup direction="vertical">
-              {/* Top Right - Detail Panel */}
+              {/* Top Right — Detail Panel */}
               <Panel defaultSize={60} minSize={40}>
-                <div className="h-full bg-background" data-tour-id="detail-panel">
-                  {selectedLocation && viewMode === 'default' ? (
+                <div className="h-full bg-background overflow-auto" data-tour-id="detail-panel">
+                  {viewMode === 'default' && selectedLocation && (
                     <LocationDetail location={selectedLocation} auditHistory={auditHistory} />
-                  ) : viewMode === 'default' ? (
-                    <EmptyState />
-                  ) : null}
-
+                  )}
+                  {viewMode === 'default' && !selectedLocation && <EmptyState />}
                   {(viewMode === 'add' || viewMode === 'modify') && (
                     <LocationForm
-                      location={viewMode === 'modify' ? selectedLocation || undefined : undefined}
+                      location={viewMode === 'modify' ? (selectedLocation ?? undefined) : undefined}
                       allLocations={state.locations}
                       onSave={handleSaveLocation}
                       onCancel={handleCancelForm}
@@ -185,9 +210,9 @@ export default function AdminDashboard() {
 
               <PanelResizeHandle className="h-1 bg-border hover:bg-primary transition-colors" />
 
-              {/* Bottom Right - Action Bar */}
+              {/* Bottom Right — Action Bar */}
               <Panel defaultSize={40} minSize={20} maxSize={60}>
-                <div className="h-full border-t bg-card p-6" data-tour-id="action-bar">
+                <div className="h-full border-t bg-card p-6 overflow-auto" data-tour-id="action-bar">
                   {viewMode === 'default' && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
@@ -198,6 +223,7 @@ export default function AdminDashboard() {
                           onClick={handleAddLocation}
                           className="justify-start"
                           data-testid="button-add-location"
+                          data-tour-id="add-button"
                         >
                           <Plus className="w-4 h-4 mr-2" />
                           Add New Location
@@ -225,7 +251,7 @@ export default function AdminDashboard() {
                       </div>
 
                       {selectedLocation && (
-                        <div className="mt-6 p-4 border rounded-md bg-muted/30 space-y-1">
+                        <div className="mt-4 p-3 border rounded-md bg-muted/30 space-y-1">
                           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                             Selected Location
                           </p>
@@ -246,15 +272,17 @@ export default function AdminDashboard() {
         </PanelGroup>
       </div>
 
-      {/* Delete Confirmation Dialog */}
+      {/* ── Dialogs ──────────────────────────────────────────────────── */}
+
+      {/* Delete */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Location</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete{' '}
-              <strong className="text-foreground">{selectedLocation?.siteName}</strong>? This action
-              will remove it from the staging layer. You must publish to make the deletion live.
+              <strong className="text-foreground">{selectedLocation?.siteName}</strong>? This
+              removes it from the staging layer. You must publish to make the deletion live.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -266,14 +294,14 @@ export default function AdminDashboard() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Publish Confirmation Dialog */}
+      {/* Publish */}
       <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Publish Changes to Live</DialogTitle>
             <DialogDescription>
-              This will publish {pendingChangesCount} change{pendingChangesCount !== 1 ? 's' : ''}{' '}
-              to the live environment. Drivers will see the updated location data immediately.
+              This will push {pendingChangesCount} change{pendingChangesCount !== 1 ? 's' : ''} to
+              the live environment. Drivers will see the updated location data immediately.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-3 mt-4">
@@ -287,7 +315,26 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Tour Overlay */}
+      {/* Settings */}
+      <SettingsPanel
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        dropboxUser={dropboxUser}
+        onDropboxDisconnect={dropboxDisconnect}
+        onDropboxRefresh={dropboxRefresh}
+        currentUser={state.currentUser}
+        onCurrentUserChange={setCurrentUser}
+      />
+
+      {/* Backup & Restore */}
+      <BackupRestore
+        open={backupOpen}
+        onOpenChange={setBackupOpen}
+        backups={backups}
+        onRestore={handleRestore}
+      />
+
+      {/* Tour */}
       {isTourActive && <TourOverlay steps={tourSteps} onComplete={endTour} />}
     </div>
   );
