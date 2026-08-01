@@ -44,6 +44,7 @@ export default function AdminDashboard() {
     deleteLocation,
     publish,
     exportData,
+    exportCsv,
     getAuditHistory,
     setCurrentUser,
     restoreBackup,
@@ -182,9 +183,22 @@ export default function AdminDashboard() {
 
   // ── Pending count ─────────────────────────────────────────────────────────
 
-  const pendingChangesCount = state.pendingPublish
-    ? Math.max(1, state.locations.length - state.publishedLocations.length)
-    : 0;
+  const pendingChangesCount = useMemo(() => {
+    if (!state.pendingPublish) return 0;
+    const publishedById = new Map(state.publishedLocations.map((loc) => [loc.id, loc]));
+    const stagingIds = new Set(state.locations.map((loc) => loc.id));
+    let count = 0;
+    // Added or edited (in staging but absent from published, or updatedAt differs)
+    for (const loc of state.locations) {
+      const pub = publishedById.get(loc.id);
+      if (!pub || pub.updatedAt !== loc.updatedAt) count++;
+    }
+    // Deleted (in published but removed from staging)
+    for (const pub of state.publishedLocations) {
+      if (!stagingIds.has(pub.id)) count++;
+    }
+    return count;
+  }, [state.locations, state.publishedLocations, state.pendingPublish]);
 
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
@@ -193,7 +207,8 @@ export default function AdminDashboard() {
         onSearchChange={setSearchQuery}
         pendingChanges={pendingChangesCount}
         onPublish={handlePublish}
-        onExport={exportData}
+        onExportJson={exportData}
+        onExportCsv={exportCsv}
         currentUser={state.currentUser}
         onStartTour={startTour}
         onOpenSettings={() => setSettingsOpen(true)}

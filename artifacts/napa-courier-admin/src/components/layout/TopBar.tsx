@@ -6,6 +6,8 @@ import { HelpMenu } from './HelpMenu';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -20,7 +22,8 @@ interface TopBarProps {
   onSearchChange: (query: string) => void;
   pendingChanges: number;
   onPublish: () => void;
-  onExport: () => void;
+  onExportJson: () => void;
+  onExportCsv: () => void;
   currentUser: string;
   onStartTour: () => void;
   onOpenSettings: () => void;
@@ -34,7 +37,8 @@ export function TopBar({
   onSearchChange,
   pendingChanges,
   onPublish,
-  onExport,
+  onExportJson,
+  onExportCsv,
   currentUser,
   onStartTour,
   onOpenSettings,
@@ -115,10 +119,25 @@ export function TopBar({
           Import
         </Button>
 
-        <Button variant="outline" onClick={onExport} data-testid="button-export">
-          <Download className="w-4 h-4 mr-2" />
-          Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" data-testid="button-export">
+              <Download className="w-4 h-4 mr-2" />
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onExportCsv} data-testid="button-export-csv">
+              Export as CSV
+              <span className="ml-auto text-xs text-muted-foreground pl-4">for Excel / Sheets</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onExportJson} data-testid="button-export-json">
+              Export as JSON
+              <span className="ml-auto text-xs text-muted-foreground pl-4">full backup</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Settings */}
         <Tooltip>

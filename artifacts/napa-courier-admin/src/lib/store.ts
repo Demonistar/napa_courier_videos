@@ -274,6 +274,30 @@ export function useLocationStore() {
 
   // ── Audit ─────────────────────────────────────────────────────────────────
 
+  /** Fields shown in the audit history panel. Internal bookkeeping fields excluded. */
+  const AUDITABLE_FIELDS: (keyof Location)[] = [
+    'siteName', 'accountNumber', 'state', 'city', 'address',
+    'videoUrl', 'imageUrl', 'instructions',
+  ];
+
+  /**
+   * Build a field-level diff for create (before=null) or delete (after=null).
+   * Produces the same shape as update diffs so the history panel is consistent.
+   */
+  function buildLocationDiff(
+    before: Location | null,
+    after: Location | null,
+  ): Record<string, { before: unknown; after: unknown }> {
+    const diff: Record<string, { before: unknown; after: unknown }> = {};
+    for (const field of AUDITABLE_FIELDS) {
+      diff[field] = {
+        before: before ? before[field] : null,
+        after:  after  ? after[field]  : null,
+      };
+    }
+    return diff;
+  }
+
   const createAuditEntry = (
     locationId: string,
     action: 'create' | 'update' | 'delete',
@@ -313,7 +337,7 @@ export function useLocationStore() {
       const auditEntry = createAuditEntry(
         newLocation.id,
         'create',
-        { location: { before: null, after: newLocation } },
+        buildLocationDiff(null, newLocation),
         prev.currentUser,
       );
 
@@ -373,7 +397,7 @@ export function useLocationStore() {
       const auditEntry = createAuditEntry(
         id,
         'delete',
-        { location: { before: location, after: null } },
+        buildLocationDiff(location, null),
         prev.currentUser,
       );
 
@@ -500,6 +524,51 @@ export function useLocationStore() {
     URL.revokeObjectURL(url);
   };
 
+  /**
+   * Export current staging locations as CSV using the exact same column headers
+   * as the import template, so a full export → edit → re-import round-trip works
+   * with zero column-mapping friction.
+   */
+  const exportCsv = () => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const filename = `napa-courier-locations-${timestamp}.csv`;
+
+    // Must match TEMPLATE_HEADERS in CsvImport.tsx exactly
+    const headers = [
+      'Site Name', 'Account Number', 'State', 'City',
+      'Address', 'Instructions', 'Video URL', 'Image URL',
+    ];
+
+    const esc = (val: string | null | undefined): string => {
+      const s = val ?? '';
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+
+    const rows = state.locations.map((loc) =>
+      [
+        esc(loc.siteName),
+        esc(loc.accountNumber),
+        esc(loc.state),
+        esc(loc.city),
+        esc(loc.address),
+        esc(loc.instructions),
+        esc(loc.videoUrl),
+        esc(loc.imageUrl),
+      ].join(','),
+    );
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ── History ───────────────────────────────────────────────────────────────
 
   const getAuditHistory = (locationId: string, limit = 5): AuditEntry[] => {
@@ -516,6 +585,7 @@ export function useLocationStore() {
     deleteLocation,
     publish,
     exportData,
+    exportCsv,
     setCurrentUser,
     getAuditHistory,
     restoreBackup,
