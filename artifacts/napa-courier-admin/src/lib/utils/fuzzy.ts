@@ -42,7 +42,7 @@ export function findSimilarLocation(
     const nameScore = similarityScore(siteName, loc.siteName);
     const addressScore = similarityScore(address, loc.address);
 
-    if (nameScore > threshold || addressScore > threshold) {
+    if (nameScore > threshold && addressScore > threshold) {
       return { siteName: loc.siteName, city: loc.city, state: loc.state };
     }
   }
