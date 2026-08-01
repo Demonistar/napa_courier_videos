@@ -38,10 +38,19 @@ export interface AppState {
 export interface BackupEntry {
   id: string;
   timestamp: string;
-  /** Human-readable description of what change this snapshot can undo */
+  /** Human-readable description of the action that triggered this snapshot */
   label: string;
   /** Number of locations in this snapshot */
   locationCount: number;
+  /**
+   * If this snapshot was triggered by a single-record mutation, the ID of that
+   * location. Null for system-wide events like Publish.
+   * Used to enable single-record restore (restores only this one location,
+   * leaving all other records exactly as they are now).
+   */
+  locationId: string | null;
+  /** Display name of the location at snapshot time, for labeling in the UI */
+  locationName: string | null;
   snapshot: AppState;
 }
 
@@ -62,7 +71,12 @@ export function getBackups(): BackupEntry[] {
   }
 }
 
-function pushBackup(label: string, snapshot: AppState): void {
+function pushBackup(
+  label: string,
+  snapshot: AppState,
+  locationId: string | null = null,
+  locationName: string | null = null,
+): void {
   try {
     const existing = getBackups();
     const entry: BackupEntry = {
@@ -70,6 +84,8 @@ function pushBackup(label: string, snapshot: AppState): void {
       timestamp: new Date().toISOString(),
       label,
       locationCount: snapshot.locations.length,
+      locationId,
+      locationName,
       snapshot,
     };
     const updated = [entry, ...existing].slice(0, MAX_BACKUPS);
@@ -274,8 +290,8 @@ export function useLocationStore() {
     };
 
     setState((prev) => {
-      // Snapshot BEFORE the change
-      pushBackup(`Undo: Add "${newLocation.siteName}"`, prev);
+      // Snapshot BEFORE the change — scoped to this new record's ID
+      pushBackup(`Added "${newLocation.siteName}"`, prev, newLocation.id, newLocation.siteName);
 
       const auditEntry = createAuditEntry(
         newLocation.id,
@@ -309,8 +325,8 @@ export function useLocationStore() {
 
       if (Object.keys(diff).length === 0) return prev;
 
-      // Snapshot BEFORE the change
-      pushBackup(`Undo: Edit "${oldLocation.siteName}"`, prev);
+      // Snapshot BEFORE the change — scoped to this record's ID
+      pushBackup(`Edited "${oldLocation.siteName}"`, prev, id, oldLocation.siteName);
 
       const updatedLocation: Location = {
         ...oldLocation,
@@ -334,8 +350,8 @@ export function useLocationStore() {
       const location = prev.locations.find((loc) => loc.id === id);
       if (!location) return prev;
 
-      // Snapshot BEFORE the change
-      pushBackup(`Undo: Delete "${location.siteName}"`, prev);
+      // Snapshot BEFORE the change — scoped to this record's ID
+      pushBackup(`Deleted "${location.siteName}"`, prev, id, location.siteName);
 
       const auditEntry = createAuditEntry(
         id,
@@ -357,7 +373,8 @@ export function useLocationStore() {
 
   const publish = () => {
     setState((prev) => {
-      pushBackup('Undo: Publish to Live', prev);
+      // Publish is a system-wide event — no single locationId
+      pushBackup('Published to Live', prev, null, null);
       return {
         ...prev,
         publishedLocations: prev.locations,
@@ -368,15 +385,79 @@ export function useLocationStore() {
 
   // ── Backup & Restore ──────────────────────────────────────────────────────
 
+  /**
+   * Full restore — replaces the ENTIRE AppState with the chosen snapshot.
+   * Every location, the published layer, and the audit log all revert.
+   */
   const restoreBackup = (backupId: string) => {
     const backups = getBackups();
     const target = backups.find((b) => b.id === backupId);
     if (!target) return false;
 
-    // Snapshot current state before restoring
     setState((prev) => {
-      pushBackup(`Undo: Restore to "${target.label.replace('Undo: ', '')}"`, prev);
+      pushBackup(`Before full restore to: ${target.label}`, prev, null, null);
       return target.snapshot;
+    });
+
+    return true;
+  };
+
+  /**
+   * Single-record restore — extracts ONE location from a snapshot and upserts
+   * it into the CURRENT state. Every other location is left exactly as it is.
+   *
+   * - Location existed in snapshot → update in place (or re-add if since deleted)
+   * - Location didn't exist in snapshot (was added after) → remove it
+   */
+  const restoreSingleLocation = (backupId: string) => {
+    const backups = getBackups();
+    const target = backups.find((b) => b.id === backupId);
+    if (!target || !target.locationId) return false;
+
+    setState((prev) => {
+      // Snapshot current state first so the restore itself is undoable
+      pushBackup(
+        `Restored "${target.locationName}"`,
+        prev,
+        target.locationId,
+        target.locationName,
+      );
+
+      const locationInSnapshot = target.snapshot.locations.find(
+        (loc) => loc.id === target.locationId,
+      );
+
+      let newLocations: Location[];
+
+      if (locationInSnapshot) {
+        const existsNow = prev.locations.some((loc) => loc.id === target.locationId);
+        if (existsNow) {
+          // Update in place — all other locations untouched
+          newLocations = prev.locations.map((loc) =>
+            loc.id === target.locationId ? locationInSnapshot : loc,
+          );
+        } else {
+          // Was deleted after snapshot — add it back
+          newLocations = [...prev.locations, locationInSnapshot];
+        }
+      } else {
+        // Didn't exist at snapshot time (was added after) — remove it
+        newLocations = prev.locations.filter((loc) => loc.id !== target.locationId);
+      }
+
+      const auditEntry = createAuditEntry(
+        target.locationId!,
+        'update',
+        { restored: { before: 'current version', after: `snapshot from ${target.timestamp}` } },
+        prev.currentUser,
+      );
+
+      return {
+        ...prev,
+        locations: newLocations,
+        auditLog: [...prev.auditLog, auditEntry],
+        pendingPublish: true,
+      };
     });
 
     return true;
@@ -421,6 +502,7 @@ export function useLocationStore() {
     setCurrentUser,
     getAuditHistory,
     restoreBackup,
+    restoreSingleLocation,
     getBackups,
   };
 }

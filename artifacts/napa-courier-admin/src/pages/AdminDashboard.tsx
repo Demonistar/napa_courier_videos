@@ -45,6 +45,7 @@ export default function AdminDashboard() {
     getAuditHistory,
     setCurrentUser,
     restoreBackup,
+    restoreSingleLocation,
   } = useLocationStore();
 
   const { user: dropboxUser, disconnect: dropboxDisconnect, refresh: dropboxRefresh } = useDropboxUser();
@@ -135,13 +136,30 @@ export default function AdminDashboard() {
 
   // ── Backup restore ────────────────────────────────────────────────────────
 
-  const handleRestore = (backupId: string) => {
+  // Reverts ONE location; every other record stays exactly as it is now
+  const handleRestoreSingle = (backupId: string) => {
+    const success = restoreSingleLocation(backupId);
+    if (success) {
+      setBackups(getBackups());
+      toast({
+        title: 'Record restored',
+        description: 'Only that location was changed. Everything else is untouched.',
+      });
+    }
+    return success;
+  };
+
+  // Replaces the ENTIRE database with a snapshot
+  const handleRestoreFull = (backupId: string) => {
     const success = restoreBackup(backupId);
     if (success) {
       setSelectedLocationId(null);
       setViewMode('default');
       setBackups(getBackups());
-      toast({ title: 'Restored', description: 'Database rolled back to the selected snapshot.' });
+      toast({
+        title: 'Full restore complete',
+        description: 'All locations reverted to the selected snapshot.',
+      });
     }
     return success;
   };
@@ -331,7 +349,8 @@ export default function AdminDashboard() {
         open={backupOpen}
         onOpenChange={setBackupOpen}
         backups={backups}
-        onRestore={handleRestore}
+        onRestoreSingle={handleRestoreSingle}
+        onRestoreFull={handleRestoreFull}
       />
 
       {/* Tour */}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, RotateCcw, Database, AlertTriangle } from 'lucide-react';
+import { Clock, RotateCcw, Database, AlertTriangle, User, Globe } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -20,21 +20,29 @@ import {
 } from '@/components/ui/alert-dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
 import { BackupEntry } from '@/lib/store';
 
 interface BackupRestoreProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   backups: BackupEntry[];
-  onRestore: (backupId: string) => boolean;
+  /** Restores ONE location from a snapshot, leaving all other locations untouched */
+  onRestoreSingle: (backupId: string) => boolean;
+  /** Replaces the ENTIRE database with a snapshot — all locations reverted */
+  onRestoreFull: (backupId: string) => boolean;
 }
+
+type ConfirmTarget = {
+  id: string;
+  mode: 'single' | 'full';
+} | null;
 
 function formatRelative(isoString: string): string {
   const diff = Date.now() - new Date(isoString).getTime();
   const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
-
   if (minutes < 1) return 'Just now';
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
@@ -51,128 +59,311 @@ function formatAbsolute(isoString: string): string {
   });
 }
 
-export function BackupRestore({ open, onOpenChange, backups, onRestore }: BackupRestoreProps) {
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+function actionVerb(label: string): string {
+  if (label.startsWith('Added')) return 'added';
+  if (label.startsWith('Edited')) return 'edited';
+  if (label.startsWith('Deleted')) return 'deleted';
+  if (label.startsWith('Restored')) return 'restored';
+  return 'changed';
+}
+
+export function BackupRestore({
+  open,
+  onOpenChange,
+  backups,
+  onRestoreSingle,
+  onRestoreFull,
+}: BackupRestoreProps) {
+  const [confirm, setConfirm] = useState<ConfirmTarget>(null);
   const [restoredId, setRestoredId] = useState<string | null>(null);
+  const [restoredMode, setRestoredMode] = useState<'single' | 'full' | null>(null);
+  const [showFullSection, setShowFullSection] = useState(false);
 
-  const targetBackup = confirmId ? backups.find((b) => b.id === confirmId) : null;
+  const targetBackup = confirm ? backups.find((b) => b.id === confirm.id) : null;
 
-  const handleConfirmRestore = () => {
-    if (!confirmId) return;
-    const success = onRestore(confirmId);
+  const handleConfirm = () => {
+    if (!confirm) return;
+    const fn = confirm.mode === 'single' ? onRestoreSingle : onRestoreFull;
+    const success = fn(confirm.id);
     if (success) {
-      setRestoredId(confirmId);
-      setTimeout(() => setRestoredId(null), 3000);
+      setRestoredId(confirm.id);
+      setRestoredMode(confirm.mode);
+      setTimeout(() => {
+        setRestoredId(null);
+        setRestoredMode(null);
+      }, 4000);
     }
-    setConfirmId(null);
+    setConfirm(null);
   };
+
+  // Split into per-record vs system-wide
+  const recordSnapshots = backups.filter((b) => b.locationId !== null);
+  const allSnapshots = backups; // Full restore can use any snapshot
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
+        <DialogContent className="max-w-xl max-h-[90vh] flex flex-col">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Database className="w-5 h-5" />
               Backup &amp; Restore
             </DialogTitle>
             <DialogDescription>
-              The last {backups.length === 0 ? '0' : `${backups.length}`} change
-              {backups.length !== 1 ? 's' : ''} are saved as full snapshots. Restoring one
-              replaces the current database state — it can be undone by restoring a later
-              snapshot.
+              Snapshots are saved automatically before every edit, add, delete, or publish. The
+              normal case is restoring a single record — only that one location changes, everything
+              else stays exactly as it is.
             </DialogDescription>
           </DialogHeader>
 
           {restoredId && (
-            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800">
-              Database restored successfully. The current state has been updated.
+            <div
+              className={`shrink-0 flex items-center gap-2 p-3 border rounded-md text-sm ${
+                restoredMode === 'full'
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-green-50 border-green-200 text-green-800'
+              }`}
+            >
+              {restoredMode === 'full'
+                ? 'Full system restore complete. All locations reverted to the selected snapshot.'
+                : 'Record restored. Only that location was changed — everything else is untouched.'}
             </div>
           )}
 
-          {backups.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
-              <Database className="w-10 h-10 mb-3 opacity-30" />
-              <p className="font-medium">No snapshots yet</p>
-              <p className="text-xs mt-1">
-                Snapshots are created automatically before every add, edit, delete, or publish
-                action.
-              </p>
-            </div>
-          ) : (
-            <ScrollArea className="h-96 pr-2">
-              <div className="space-y-2">
-                {backups.map((backup, index) => (
-                  <div
-                    key={backup.id}
-                    className={`flex items-start justify-between gap-3 p-3 border rounded-md transition-colors ${
-                      restoredId === backup.id
-                        ? 'border-green-300 bg-green-50'
-                        : 'hover:bg-muted/40'
-                    }`}
-                    data-testid={`backup-entry-${backup.id}`}
-                  >
-                    <div className="flex items-start gap-3 min-w-0">
-                      <Clock className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">
-                          {backup.label}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {formatAbsolute(backup.timestamp)}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="secondary" className="text-xs py-0">
-                            {backup.locationCount} location{backup.locationCount !== 1 ? 's' : ''}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {formatRelative(backup.timestamp)}
-                          </span>
-                          {index === 0 && (
-                            <Badge className="text-xs py-0 bg-blue-100 text-blue-800 border-blue-200">
-                              Most recent
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setConfirmId(backup.id)}
-                      className="shrink-0"
-                      data-testid={`button-restore-${backup.id}`}
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                      Restore
-                    </Button>
-                  </div>
-                ))}
+          <div className="flex-1 overflow-hidden flex flex-col gap-0 min-h-0">
+            {/* ── Section 1: Single-record restore ───────────────────── */}
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="flex items-center gap-2 px-1 py-2 shrink-0">
+                <User className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Restore a Single Record</h3>
+                <Badge variant="secondary" className="text-xs py-0">
+                  {recordSnapshots.length}
+                </Badge>
               </div>
-            </ScrollArea>
-          )}
+              <p className="text-xs text-muted-foreground px-1 pb-2 shrink-0">
+                Clicking <strong>Restore this record</strong> only reverts that one location. Every
+                other location stays exactly as it is right now.
+              </p>
+
+              {recordSnapshots.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
+                  <Database className="w-8 h-8 mb-2 opacity-30" />
+                  <p className="text-sm">No per-record snapshots yet</p>
+                  <p className="text-xs mt-1">
+                    Snapshots appear here after you edit, add, or delete a location.
+                  </p>
+                </div>
+              ) : (
+                <ScrollArea className="flex-1 min-h-0 pr-1">
+                  <div className="space-y-2 pb-1">
+                    {recordSnapshots.map((backup, index) => (
+                      <div
+                        key={backup.id}
+                        className={`flex items-start justify-between gap-3 p-3 border rounded-md transition-colors ${
+                          restoredId === backup.id && restoredMode === 'single'
+                            ? 'border-green-300 bg-green-50'
+                            : 'hover:bg-muted/40'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <Clock className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-medium text-foreground truncate">
+                                {backup.locationName}
+                              </p>
+                              <Badge
+                                variant="outline"
+                                className="text-xs py-0 capitalize shrink-0"
+                              >
+                                {actionVerb(backup.label)}
+                              </Badge>
+                              {index === 0 && (
+                                <Badge className="text-xs py-0 bg-blue-100 text-blue-800 border-blue-200 shrink-0">
+                                  Most recent
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {formatAbsolute(backup.timestamp)} · {formatRelative(backup.timestamp)}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {backup.locationCount} locations in database at this point
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConfirm({ id: backup.id, mode: 'single' })}
+                          className="shrink-0"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                          Restore this record
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
+
+            {/* ── Section 2: Full system restore ─────────────────────── */}
+            <div className="shrink-0 mt-2">
+              <Separator />
+              <button
+                className="flex items-center gap-2 w-full px-1 py-2 text-left hover:bg-muted/40 rounded transition-colors group"
+                onClick={() => setShowFullSection((v) => !v)}
+              >
+                <Globe className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
+                  Full System Restore
+                </h3>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 ml-1" />
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {showFullSection ? 'Hide' : 'Show'}
+                </span>
+              </button>
+
+              {showFullSection && (
+                <div className="mt-1 space-y-2">
+                  <div className="flex items-start gap-2 p-3 border border-amber-200 bg-amber-50 rounded-md text-xs text-amber-800">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <p>
+                      <strong>Reverts every location</strong>, not just one. Use this only if
+                      something went wrong across the whole database. All edits made after the
+                      chosen snapshot will be lost for all records.
+                    </p>
+                  </div>
+
+                  {allSnapshots.length === 0 ? (
+                    <p className="text-xs text-muted-foreground px-1 py-2">No snapshots available.</p>
+                  ) : (
+                    <ScrollArea className="max-h-48 pr-1">
+                      <div className="space-y-2 pb-1">
+                        {allSnapshots.map((backup) => (
+                          <div
+                            key={backup.id}
+                            className={`flex items-start justify-between gap-3 p-3 border rounded-md transition-colors ${
+                              restoredId === backup.id && restoredMode === 'full'
+                                ? 'border-amber-300 bg-amber-50'
+                                : 'hover:bg-muted/40'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3 min-w-0">
+                              <Clock className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">
+                                  {backup.label}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {formatAbsolute(backup.timestamp)} · {formatRelative(backup.timestamp)}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {backup.locationCount} locations in database at this point
+                                </p>
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setConfirm({ id: backup.id, mode: 'full' })}
+                              className="shrink-0 border-amber-300 text-amber-700 hover:bg-amber-50"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                              Restore all
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!confirmId} onOpenChange={(o) => !o && setConfirmId(null)}>
+      {/* ── Confirm: single-record restore ───────────────────────────── */}
+      <AlertDialog
+        open={!!confirm && confirm.mode === 'single'}
+        onOpenChange={(o) => !o && setConfirm(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-500" />
-              Restore this snapshot?
+              <RotateCcw className="w-5 h-5 text-primary" />
+              Restore this record only?
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              This will replace the current database with the snapshot from{' '}
-              <strong>{targetBackup ? formatAbsolute(targetBackup.timestamp) : ''}</strong>.
-              <br />
-              <br />
-              Your current state will be saved as a new snapshot first, so you can undo this
-              restore if needed.
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  This will revert{' '}
+                  <strong className="text-foreground">
+                    {targetBackup?.locationName ?? 'this location'}
+                  </strong>{' '}
+                  back to its state from{' '}
+                  <strong className="text-foreground">
+                    {targetBackup ? formatAbsolute(targetBackup.timestamp) : ''}
+                  </strong>
+                  .
+                </p>
+                <div className="p-3 bg-green-50 border border-green-200 rounded-md text-green-800 text-xs">
+                  ✓ Every other location in the database will stay exactly as it is right now.
+                  Nothing else changes.
+                </div>
+                <p>Your current state is saved as a new snapshot first, so this can be undone.</p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmRestore}>Restore Snapshot</AlertDialogAction>
+            <AlertDialogAction onClick={handleConfirm}>
+              Restore {targetBackup?.locationName ?? 'this record'} only
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Confirm: full system restore ─────────────────────────────── */}
+      <AlertDialog
+        open={!!confirm && confirm.mode === 'full'}
+        onOpenChange={(o) => !o && setConfirm(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Restore the entire database?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  This will revert{' '}
+                  <strong className="text-foreground">every location</strong> back to the state
+                  from{' '}
+                  <strong className="text-foreground">
+                    {targetBackup ? formatAbsolute(targetBackup.timestamp) : ''}
+                  </strong>
+                  .
+                </p>
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-amber-800 text-xs">
+                  ⚠ All edits made after that snapshot — to every record — will be undone. This is
+                  not limited to one location.
+                </div>
+                <p>Your current state is saved as a new snapshot first, so this can be undone.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirm}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              Yes, restore entire database
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
