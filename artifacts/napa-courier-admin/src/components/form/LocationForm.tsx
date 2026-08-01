@@ -20,6 +20,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel }: Locat
   const [state, setState] = useState(location?.state || '');
   const [city, setCity] = useState(location?.city || '');
   const [siteName, setSiteName] = useState(location?.siteName || '');
+  const [accountNumber, setAccountNumber] = useState(location?.accountNumber || '');
   const [address, setAddress] = useState(location?.address || '');
   const [videoUrl, setVideoUrl] = useState(location?.videoUrl || '');
   const [imageUrl, setImageUrl] = useState(location?.imageUrl || '');
@@ -72,6 +73,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel }: Locat
       state,
       city,
       siteName,
+      accountNumber,
       address,
       videoUrl: videoUrl.trim() || null,
       imageUrl: imageUrl.trim() || null,
@@ -87,6 +89,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel }: Locat
       state,
       city,
       siteName,
+      accountNumber,
       address,
       videoUrl: videoUrl.trim() || null,
       imageUrl: imageUrl.trim() || null,
@@ -130,6 +133,17 @@ export function LocationForm({ location, allLocations, onSave, onCancel }: Locat
               onChange={(e) => setSiteName(e.target.value)}
               placeholder="e.g. Sheriff's Office"
               data-testid="input-site-name"
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="accountNumber">Account Number</Label>
+            <Input
+              id="accountNumber"
+              value={accountNumber}
+              onChange={(e) => setAccountNumber(e.target.value)}
+              placeholder="e.g. 00123456"
+              data-testid="input-account-number"
             />
           </div>
 

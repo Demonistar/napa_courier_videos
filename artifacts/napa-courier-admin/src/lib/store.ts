@@ -7,6 +7,7 @@ export interface Location {
   state: string;
   city: string;
   siteName: string;
+  accountNumber: string;
   address: string;
   videoUrl: string | null;
   imageUrl: string | null;
@@ -103,6 +104,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Bentonville',
     siteName: "Sheriff's Office",
+    accountNumber: '',
     address: '215 SW 14th St, Bentonville, AR 72712',
     videoUrl: null,
     imageUrl: null,
@@ -117,6 +119,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Bentonville',
     siteName: 'Christian Brothers Automotive',
+    accountNumber: '',
     address: '3404 SE 14th St, Bentonville, AR 72712',
     videoUrl: null,
     imageUrl: null,
@@ -131,6 +134,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Bentonville',
     siteName: 'Straight Line',
+    accountNumber: '',
     address: '1007 SE 28th St, Bentonville, AR 72712',
     videoUrl: null,
     imageUrl: null,
@@ -145,6 +149,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Bentonville',
     siteName: 'Straight Line 2',
+    accountNumber: '',
     address: '2101 SE Walton Blvd, Bentonville, AR 72712',
     videoUrl: null,
     imageUrl: null,
@@ -159,6 +164,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Rogers',
     siteName: 'Rogers Police Department',
+    accountNumber: '',
     address: '317 W Walnut St, Rogers, AR 72756',
     videoUrl: null,
     imageUrl: null,
@@ -173,6 +179,7 @@ const seedData: Location[] = [
     state: 'Arkansas',
     city: 'Rogers',
     siteName: 'Rogers Fire Station',
+    accountNumber: '',
     address: '110 S 2nd St, Rogers, AR 72756',
     videoUrl: null,
     imageUrl: null,
@@ -187,6 +194,7 @@ const seedData: Location[] = [
     state: 'Missouri',
     city: 'Monett',
     siteName: 'Monett City Hall',
+    accountNumber: '',
     address: '217 E Broadway, Monett, MO 65708',
     videoUrl: null,
     imageUrl: null,
@@ -201,6 +209,7 @@ const seedData: Location[] = [
     state: 'Missouri',
     city: 'Mount Vernon',
     siteName: 'Mount Vernon Courthouse',
+    accountNumber: '',
     address: '100 W Hwy 174, Mount Vernon, MO 65712',
     videoUrl: null,
     imageUrl: null,
@@ -215,6 +224,7 @@ const seedData: Location[] = [
     state: 'Missouri',
     city: 'Cassville',
     siteName: 'Cassville Pharmacy',
+    accountNumber: '',
     address: '1010 Old Exeter Rd, Cassville, MO 65625',
     videoUrl: null,
     imageUrl: null,

@@ -73,9 +73,11 @@ export function LocationTree({
             locations: cityNode.locations.filter(
               (loc) =>
                 loc.siteName.toLowerCase().includes(query) ||
+                loc.accountNumber.toLowerCase().includes(query) ||
                 loc.city.toLowerCase().includes(query) ||
                 loc.state.toLowerCase().includes(query) ||
-                loc.address.toLowerCase().includes(query)
+                loc.address.toLowerCase().includes(query) ||
+                loc.instructions.toLowerCase().includes(query)
             ),
           }))
           .filter((cityNode) => cityNode.locations.length > 0),

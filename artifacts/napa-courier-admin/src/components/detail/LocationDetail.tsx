@@ -40,6 +40,17 @@ export function LocationDetail({ location, auditHistory }: LocationDetailProps) 
           </p>
         </div>
 
+        {location.accountNumber && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+              Account Number
+            </p>
+            <p className="text-sm text-foreground font-mono" data-testid="text-account-number">
+              {location.accountNumber}
+            </p>
+          </div>
+        )}
+
         <div className="space-y-2">
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1">
