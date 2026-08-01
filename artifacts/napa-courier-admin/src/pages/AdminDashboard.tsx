@@ -31,6 +31,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useDropboxUser } from '@/hooks/use-dropbox-user';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { BackupRestore } from '@/components/backup/BackupRestore';
+import { CsvImport } from '@/components/import/CsvImport';
+import { Location } from '@/lib/store';
 
 type ViewMode = 'default' | 'add' | 'modify';
 
@@ -64,6 +66,7 @@ export default function AdminDashboard() {
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
 
   const { isTourActive, startTour, endTour } = useTour();
@@ -134,6 +137,19 @@ export default function AdminDashboard() {
     toast({ title: 'Published', description: 'All changes are now live for drivers.' });
   };
 
+  // ── CSV Import ────────────────────────────────────────────────────────────
+
+  const handleImportLocations = (
+    rows: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>[],
+    source: string,
+  ) => {
+    rows.forEach((row) => addLocation(row, { source }));
+    toast({
+      title: 'Import complete',
+      description: `${rows.length} location${rows.length !== 1 ? 's' : ''} added to staging. Publish when ready.`,
+    });
+  };
+
   // ── Backup restore ────────────────────────────────────────────────────────
 
   // Reverts ONE location; every other record stays exactly as it is now
@@ -182,6 +198,7 @@ export default function AdminDashboard() {
         onStartTour={startTour}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenBackup={() => setBackupOpen(true)}
+        onOpenImport={() => setImportOpen(true)}
         dropboxUser={dropboxUser}
       />
 
@@ -351,6 +368,14 @@ export default function AdminDashboard() {
         backups={backups}
         onRestoreSingle={handleRestoreSingle}
         onRestoreFull={handleRestoreFull}
+      />
+
+      {/* CSV Import */}
+      <CsvImport
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        existingLocations={state.locations}
+        onImport={handleImportLocations}
       />
 
       {/* Tour */}

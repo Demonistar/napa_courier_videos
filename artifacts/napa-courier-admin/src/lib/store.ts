@@ -290,7 +290,10 @@ export function useLocationStore() {
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
 
-  const addLocation = (location: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addLocation = (
+    location: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>,
+    options?: { source?: string },
+  ) => {
     const now = new Date().toISOString();
     const newLocation: Location = {
       ...location,
@@ -299,9 +302,13 @@ export function useLocationStore() {
       updatedAt: now,
     };
 
+    const backupLabel = options?.source
+      ? `Added "${newLocation.siteName}" (${options.source})`
+      : `Added "${newLocation.siteName}"`;
+
     setState((prev) => {
       // Snapshot BEFORE the change — scoped to this new record's ID
-      pushBackup(`Added "${newLocation.siteName}"`, prev, newLocation.id, newLocation.siteName);
+      pushBackup(backupLabel, prev, newLocation.id, newLocation.siteName);
 
       const auditEntry = createAuditEntry(
         newLocation.id,

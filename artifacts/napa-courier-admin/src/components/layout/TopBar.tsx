@@ -1,4 +1,4 @@
-import { Search, HelpCircle, Download, Settings, Cloud, CloudOff, AlertTriangle } from 'lucide-react';
+import { Search, HelpCircle, Download, Upload, Settings, Cloud, CloudOff, AlertTriangle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +25,7 @@ interface TopBarProps {
   onStartTour: () => void;
   onOpenSettings: () => void;
   onOpenBackup: () => void;
+  onOpenImport: () => void;
   dropboxUser: DropboxUserInfo;
 }
 
@@ -38,6 +39,7 @@ export function TopBar({
   onStartTour,
   onOpenSettings,
   onOpenBackup,
+  onOpenImport,
   dropboxUser,
 }: TopBarProps) {
   return (
@@ -106,6 +108,11 @@ export function TopBar({
           data-tour-id="publish-button"
         >
           Publish to Live
+        </Button>
+
+        <Button variant="outline" onClick={onOpenImport} data-testid="button-import">
+          <Upload className="w-4 h-4 mr-2" />
+          Import
         </Button>
 
         <Button variant="outline" onClick={onExport} data-testid="button-export">
