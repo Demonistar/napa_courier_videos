@@ -20,12 +20,27 @@ Data is stored in a **shared Dropbox folder** — all five admins read and write
 
 ---
 
+## Platform Support
+
+| Platform | Output | Build machine required |
+|---|---|---|
+| Windows (x64) | NSIS `.exe` installer | Any Windows machine |
+| macOS (Intel, x64) | `.dmg` disk image | Must be built on a Mac |
+| macOS (Apple Silicon, arm64) | `.dmg` disk image | Must be built on a Mac (M1/M2/M3) |
+
+**Craig and other Mac admins:** build the macOS version on your Mac and distribute the `.dmg`.
+**Windows admins:** build on Windows and distribute the `.exe` installer.
+There is no cross-compilation — macOS builds cannot be produced on a Windows machine.
+
+---
+
 ## Prerequisites
 
 - **Node.js 18 or later** — download from https://nodejs.org (use the LTS version)
 - **npm** — included with Node.js
 - A **Dropbox account** that has access to the shared folder
 - A Dropbox **App Key** (one-time setup, see below)
+- **macOS only:** Xcode Command Line Tools — run `xcode-select --install` in Terminal if you haven't already
 
 ---
 
@@ -113,36 +128,61 @@ npm run build
 
 This compiles TypeScript and bundles the renderer with Vite. Output goes to `out/`.
 
-To verify the build looks right before packaging:
+To verify the build looks right before packaging (no installer created):
 
 ```
-npm run package:dir
+# Windows
+npm run package:dir:win
+
+# macOS
+npm run package:dir:mac
 ```
 
-This creates an unpackaged app in `dist-installer/win-unpacked/`. Double-click `NAPA Courier Admin.exe` to test it. No installer is created yet.
+On Windows, the unpackaged app is in `dist-installer/win-unpacked/NAPA Courier Admin.exe`.
+On macOS, it's in `dist-installer/mac/NAPA Courier Admin.app` — double-click to test.
 
 ---
 
-## Step 7 — Create the Windows Installer
+## Step 7 — Create the Installer
+
+### Windows
 
 ```
-npm run package
+npm run package:win
 ```
 
-This creates a `.exe` NSIS installer in `dist-installer/`:
+Output: `dist-installer/NAPA Courier Admin Setup 1.0.0.exe`
 
+Distribute this file to Windows admins. They double-click it and follow the wizard —
+no Node.js or npm needed on their machines.
+
+### macOS
+
+```
+npm run package:mac
+```
+
+Output:
 ```
 dist-installer/
-  NAPA Courier Admin Setup 1.0.0.exe
+  NAPA Courier Admin-1.0.0.dmg           ← Intel Mac (x64)
+  NAPA Courier Admin-1.0.0-arm64.dmg     ← Apple Silicon Mac (M1/M2/M3)
 ```
 
-Distribute this file to the other admins. They double-click it and follow the installer wizard — no Node.js or npm needed on their machines.
+Distribute the correct `.dmg` based on the recipient's Mac hardware.
+To check: Apple menu → About This Mac → look for "Apple M" (arm64) or "Intel" (x64).
+
+> **Gatekeeper warning:** Without an Apple Developer certificate and notarization,
+> macOS will show "cannot be opened because the developer cannot be verified" on the
+> first launch. The workaround is: right-click the app → Open → Open (bypasses the warning
+> once). See the Troubleshooting section for how to properly notarize for distribution.
 
 ---
 
 ## First Run (for each admin)
 
-1. Open **NAPA Courier Admin** from the Start menu or desktop shortcut.
+1. **Windows:** Open from the Start menu or desktop shortcut.
+   **macOS:** Open the `.dmg`, drag the app to Applications, then open it from Launchpad.
 2. Click **"Sign in with Dropbox"** — a browser window opens.
 3. Sign in with your personal Dropbox account.
 4. Grant the app access when prompted.
@@ -183,18 +223,34 @@ Two admins saved at almost the same time. Choose:
 When in doubt, reload. You can get your changes back from **Backup & Restore**.
 
 ### App is blank / white screen
-Open DevTools (**Ctrl+Shift+I**) and check the Console tab for errors. Common causes:
+Open DevTools and check the Console tab for errors.
+- **Windows:** `Ctrl+Shift+I`
+- **macOS:** `Cmd+Option+I` (only available in development builds; in production use `View → Toggle Developer Tools` if the menu is present)
+
+Common causes:
 - Missing `node_modules/` — run `npm install` and rebuild.
 - `src/` is missing component files — run `setup-components.sh` and rebuild.
 
-### Token is corrupted / won't sign in
-Delete the encrypted token file and sign in again:
+### Cmd+C / Cmd+V / Cmd+Z don't work on macOS
+This is fixed in the current build (a native Edit menu is wired up in `electron/main.ts`). If you see this on an older build, rebuild from the latest source.
 
+### App is blocked on macOS ("developer cannot be verified")
+This is macOS Gatekeeper. For a quick workaround: **right-click** the app → **Open** → **Open**. This bypasses the warning permanently for that machine. For proper distribution without any warning, the app needs to be code-signed and notarized with an Apple Developer account (see Task #8 in the project task list).
+
+### Token is corrupted / won't sign in
+Delete the encrypted token file and sign in again.
+
+**Windows:**
 ```
 %APPDATA%\napa-courier-admin\dropbox-token.enc
 ```
-
 (Paste that path into File Explorer's address bar.)
+
+**macOS:**
+```
+~/Library/Application Support/napa-courier-admin/dropbox-token.enc
+```
+(In Finder: Go → Go to Folder… → paste the path.)
 
 ---
 
@@ -264,5 +320,10 @@ electron-app/
 └── README.md           — this file
 ```
 
-Token storage: `%APPDATA%\napa-courier-admin\dropbox-token.enc`
-App settings: `%APPDATA%\napa-courier-admin\app-settings.json`
+Token storage:
+- Windows: `%APPDATA%\napa-courier-admin\dropbox-token.enc`
+- macOS:   `~/Library/Application Support/napa-courier-admin/dropbox-token.enc`
+
+App settings:
+- Windows: `%APPDATA%\napa-courier-admin\app-settings.json`
+- macOS:   `~/Library/Application Support/napa-courier-admin/app-settings.json`

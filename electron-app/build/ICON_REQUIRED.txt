@@ -1,19 +1,50 @@
-A Windows icon file (icon.ico) is required here before packaging.
+Two icon files are needed here — one per platform:
 
-Requirements:
-- File name: icon.ico
-- Format: Windows ICO with multiple sizes embedded
-  Recommended sizes: 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 pixels
-- Color depth: 32-bit RGBA
+════════════════════════════════════════
+  Windows:  build/icon.ico
+════════════════════════════════════════
+Format: Windows ICO with multiple sizes embedded
+Recommended sizes: 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 px
+Color depth: 32-bit RGBA
 
-How to create one:
-  Option A: Use https://redketchup.io/icon-editor — upload a PNG and download as .ico
-  Option B: Use GIMP (File → Export As → Windows Icon)
-  Option C: Use https://www.icoconverter.com/
+How to create it:
+  Option A: https://redketchup.io/icon-editor — upload a PNG, export as .ico
+  Option B: GIMP → File → Export As → Windows Icon (.ico)
+  Option C: https://www.icoconverter.com/
 
-Place the finished icon.ico in this folder (electron-app/build/icon.ico).
-Then run:  npm run build && npm run package
+════════════════════════════════════════
+  macOS:    build/icon.icns
+════════════════════════════════════════
+Format: Apple Icon Image (.icns) with multiple sizes embedded
+Required sizes: 16, 32, 64, 128, 256, 512, 1024 px (macOS uses all of them)
 
-NOTE: Without icon.ico, electron-builder will use the default Electron icon.
-You can build/package without it by removing the `icon` lines from electron-builder.yml,
-but the app and installer will show a generic Electron icon.
+How to create it (on a Mac):
+  Option A: iconutil — the official Apple tool
+    1. Create a folder named MyIcon.iconset/
+    2. Place PNG files inside:
+         icon_16x16.png, icon_16x16@2x.png
+         icon_32x32.png, icon_32x32@2x.png
+         icon_128x128.png, icon_128x128@2x.png
+         icon_256x256.png, icon_256x256@2x.png
+         icon_512x512.png, icon_512x512@2x.png
+    3. Run: iconutil -c icns MyIcon.iconset
+  Option B: https://cloudconvert.com/png-to-icns — upload a 1024×1024 PNG
+
+════════════════════════════════════════
+  Start from a single master image
+════════════════════════════════════════
+The easiest approach is to design one 1024×1024 PNG master and generate
+both formats from it.
+
+Recommended tool:  https://www.npmjs.com/package/electron-icon-builder
+  npm install -g electron-icon-builder
+  electron-icon-builder --input=icon-master-1024.png --output=build/
+
+This generates icon.ico and icon.icns from the master automatically.
+
+════════════════════════════════════════
+  Building without icons (quick test)
+════════════════════════════════════════
+You can package the app without icons by removing the `icon:` lines from
+electron-builder.yml. The app and installer will show the generic Electron
+icon, but everything will still work.

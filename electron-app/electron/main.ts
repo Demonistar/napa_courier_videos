@@ -5,6 +5,8 @@ import {
   shell,
   safeStorage,
   nativeTheme,
+  Menu,
+  MenuItem,
 } from 'electron';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -601,6 +603,98 @@ function registerIpcHandlers() {
 
 // ─── Window ───────────────────────────────────────────────────────────────────
 
+/**
+ * Build a macOS-compatible application menu.
+ *
+ * On macOS, Electron apps do NOT get a default Edit menu, which means standard
+ * keyboard shortcuts (Cmd+C, Cmd+V, Cmd+A, Cmd+Z, Cmd+X) are silently broken
+ * in every text input unless you explicitly create a menu with those roles.
+ * This function wires them all up. On Windows/Linux the system handles this
+ * natively, but the menu is harmless there too.
+ */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin';
+
+  const template: (Electron.MenuItemConstructorOptions | MenuItem)[] = [
+    // macOS requires the first menu item to be the app name menu
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' as const },
+        { type: 'separator' as const },
+        { role: 'services' as const },
+        { type: 'separator' as const },
+        { role: 'hide' as const },
+        { role: 'hideOthers' as const },
+        { role: 'unhide' as const },
+        { type: 'separator' as const },
+        { role: 'quit' as const },
+      ],
+    }] : []),
+    // File menu
+    {
+      label: 'File',
+      submenu: [
+        isMac ? { role: 'close' as const } : { role: 'quit' as const },
+      ],
+    },
+    // Edit menu — this is the critical one for text field shortcuts on macOS
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const },
+        { role: 'redo' as const },
+        { type: 'separator' as const },
+        { role: 'cut' as const },
+        { role: 'copy' as const },
+        { role: 'paste' as const },
+        { role: 'selectAll' as const },
+        ...(isMac ? [
+          { type: 'separator' as const },
+          {
+            label: 'Speech',
+            submenu: [
+              { role: 'startSpeaking' as const },
+              { role: 'stopSpeaking' as const },
+            ],
+          },
+        ] : []),
+      ],
+    },
+    // View menu — dev tools only in development
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' as const },
+        { role: 'zoomIn' as const },
+        { role: 'zoomOut' as const },
+        { type: 'separator' as const },
+        { role: 'togglefullscreen' as const },
+        ...(process.env.NODE_ENV === 'development' ? [
+          { type: 'separator' as const },
+          { role: 'toggleDevTools' as const },
+        ] : []),
+      ],
+    },
+    // Window menu
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' as const },
+        { role: 'zoom' as const },
+        ...(isMac ? [
+          { type: 'separator' as const },
+          { role: 'front' as const },
+        ] : [
+          { role: 'close' as const },
+        ]),
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,
@@ -613,7 +707,10 @@ function createMainWindow(): BrowserWindow {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // needed for safeStorage to work in preload
+      // sandbox: false is required because contextBridge + ipcRenderer in preload
+      // needs access to Node.js-side APIs that the renderer sandbox blocks.
+      // safeStorage lives entirely in the main process and is unrelated.
+      sandbox: false,
     },
   });
 
@@ -645,6 +742,7 @@ function createMainWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
+  buildAppMenu();
   registerIpcHandlers();
   createMainWindow();
 

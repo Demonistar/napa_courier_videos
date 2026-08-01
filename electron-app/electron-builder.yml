@@ -10,6 +10,7 @@ files:
   - out/**/*
   - "!out/**/*.map"
 
+# ── Windows ───────────────────────────────────────────────────────────────────
 win:
   target:
     - target: nsis
@@ -28,5 +29,33 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: NAPA Courier Admin
   license: build/license.txt
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+# Must be built on a Mac. Produces a .dmg for both Intel and Apple Silicon.
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]   # x64 = Intel Macs, arm64 = M1/M2/M3 Macs
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  # For distribution outside the Mac App Store, notarization is recommended
+  # so macOS Gatekeeper doesn't block the app. See README for instructions.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  sign: false                   # set to true once you have an Apple Developer certificate
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
 
 publish: null
