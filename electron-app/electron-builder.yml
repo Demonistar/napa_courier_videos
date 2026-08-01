@@ -1,0 +1,32 @@
+appId: com.napacourier.admin
+productName: NAPA Courier Admin
+copyright: Copyright © 2025 NAPA Courier
+
+directories:
+  buildResources: build
+  output: dist-installer
+
+files:
+  - out/**/*
+  - "!out/**/*.map"
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: NAPA Courier Admin
+  license: build/license.txt
+
+publish: null

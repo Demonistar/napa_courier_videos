@@ -1,0 +1,19 @@
+A Windows icon file (icon.ico) is required here before packaging.
+
+Requirements:
+- File name: icon.ico
+- Format: Windows ICO with multiple sizes embedded
+  Recommended sizes: 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 pixels
+- Color depth: 32-bit RGBA
+
+How to create one:
+  Option A: Use https://redketchup.io/icon-editor — upload a PNG and download as .ico
+  Option B: Use GIMP (File → Export As → Windows Icon)
+  Option C: Use https://www.icoconverter.com/
+
+Place the finished icon.ico in this folder (electron-app/build/icon.ico).
+Then run:  npm run build && npm run package
+
+NOTE: Without icon.ico, electron-builder will use the default Electron icon.
+You can build/package without it by removing the `icon` lines from electron-builder.yml,
+but the app and installer will show a generic Electron icon.

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# setup-components.sh
+#
+# Copies unchanged components from the web app source into this Electron app.
+# Run this once from the electron-app/ directory before your first build:
+#
+#   bash setup-components.sh
+#
+# What gets copied:
+#   • src/components/ui/       — shadcn/ui primitives (unchanged)
+#   • src/components/detail/   — LocationDetail, EmptyState (unchanged)
+#   • src/components/form/     — LocationForm (unchanged)
+#   • src/components/import/   — CsvImport (unchanged)
+#   • src/components/tree/     — LocationTree (unchanged)
+#   • src/components/tutorial/ — TourOverlay, useTour (unchanged)
+#   • src/components/layout/   — TopBar, HelpMenu (unchanged)
+#   • src/hooks/use-toast.ts   — unchanged
+#   • src/hooks/use-mobile.tsx — unchanged
+#   • src/lib/utils/           — csv.ts, fuzzy.ts (unchanged)
+#   • src/index.css            — Tailwind base + design tokens
+#
+# Components already written for the Electron version (do NOT copy):
+#   • src/pages/AdminDashboard.tsx  — rewritten (async store, conflict dialog)
+#   • src/components/backup/        — rewritten (async handlers)
+#   • src/components/settings/      — rewritten (IPC instead of API)
+#   • src/hooks/use-dropbox-user.ts — rewritten (IPC instead of HTTP)
+#   • src/lib/store.ts              — rewritten (Dropbox-backed async)
+#   • src/lib/utils.ts              — already present (cn helper)
+#   • src/App.tsx                   — already present
+#   • src/main.tsx                  — already present
+#   • src/index.html                — already present
+# ─────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$SCRIPT_DIR/../artifacts/napa-courier-admin/src"
+DEST="$SCRIPT_DIR/src"
+
+if [[ ! -d "$SRC" ]]; then
+  echo "❌  Cannot find web app source at $SRC"
+  echo "    Make sure you run this from the electron-app/ directory and that"
+  echo "    artifacts/napa-courier-admin/ exists in the workspace root."
+  exit 1
+fi
+
+echo "📂  Web app source : $SRC"
+echo "📂  Electron dest  : $DEST"
+echo ""
+
+# ── Helper: copy a directory, creating destination if needed ─────────────────
+copy_dir() {
+  local from="$SRC/$1"
+  local to="$DEST/$1"
+  if [[ ! -d "$from" ]]; then
+    echo "⚠   SKIP  $1  (directory not found in web app)"
+    return
+  fi
+  mkdir -p "$to"
+  cp -r "$from/." "$to/"
+  echo "✓   COPY  $1/"
+}
+
+# ── Helper: copy a single file ────────────────────────────────────────────────
+copy_file() {
+  local from="$SRC/$1"
+  local to="$DEST/$1"
+  if [[ ! -f "$from" ]]; then
+    echo "⚠   SKIP  $1  (file not found in web app)"
+    return
+  fi
+  mkdir -p "$(dirname "$to")"
+  cp "$from" "$to"
+  echo "✓   COPY  $1"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "── UI Primitives (shadcn/ui) ──────────────────────────────────────────"
+copy_dir "components/ui"
+
+echo ""
+echo "── Page Components ────────────────────────────────────────────────────"
+copy_dir "components/detail"
+copy_dir "components/form"
+copy_dir "components/import"
+copy_dir "components/tree"
+copy_dir "components/tutorial"
+
+echo ""
+echo "── Layout (TopBar + HelpMenu) ─────────────────────────────────────────"
+copy_file "components/layout/TopBar.tsx"
+copy_file "components/layout/HelpMenu.tsx"
+# Note: We do NOT copy SettingsPanel.tsx — the Electron version is already present.
+
+echo ""
+echo "── Hooks ──────────────────────────────────────────────────────────────"
+copy_file "hooks/use-toast.ts"
+copy_file "hooks/use-mobile.tsx"
+
+echo ""
+echo "── Lib Utilities ──────────────────────────────────────────────────────"
+mkdir -p "$DEST/lib/utils"
+copy_file "lib/utils/csv.ts"
+copy_file "lib/utils/fuzzy.ts"
+
+echo ""
+echo "── Styles ─────────────────────────────────────────────────────────────"
+copy_file "index.css"
+
+echo ""
+echo "────────────────────────────────────────────────────────────────────────"
+echo "✅  Done! Component files are in src/."
+echo ""
+echo "Next steps:"
+echo "  1. Create a .env file from .env.example and fill in your DROPBOX_APP_KEY"
+echo "  2. npm install"
+echo "  3. npm run build && npm run package"
+echo "  4. Installer is in dist-installer/"
+echo ""
