@@ -17,6 +17,30 @@ win:
       arch: [x64]
   icon: build/icon.ico
   requestedExecutionLevel: asInvoker
+  # ── Code signing (prevents SmartScreen "unrecognized app" warning) ──────────
+  # electron-builder reads these environment variables automatically at build
+  # time. Set them in your shell before running `npm run package:win`.
+  #
+  #   WIN_CSC_LINK         — path to your .pfx certificate file, OR a
+  #                          base64-encoded copy of the .pfx (useful for CI)
+  #                          e.g.  C:\certs\napa-courier.pfx
+  #                               or  $(certutil -encode cert.pfx tmp && cat tmp)
+  #   WIN_CSC_KEY_PASSWORD — the password you chose when exporting the .pfx
+  #
+  # Both variables must be set. If either is missing, electron-builder skips
+  # signing and the resulting installer will trigger SmartScreen.
+  #
+  # Recommended certificate types (in order of SmartScreen trust):
+  #   1. EV (Extended Validation) code-signing cert — immediate SmartScreen
+  #      reputation; requires hardware token (USB key). ~$300–500/yr.
+  #      Vendors: DigiCert, Sectigo, GlobalSign.
+  #   2. OV (Organization Validation) code-signing cert — builds SmartScreen
+  #      reputation over time (usually clears after ~100–500 installs).
+  #      ~$100–200/yr from the same vendors.
+  #
+  # See README.md → "Code Signing (Windows)" for the full setup guide.
+  signingHashAlgorithms:
+    - sha256
 
 nsis:
   oneClick: false

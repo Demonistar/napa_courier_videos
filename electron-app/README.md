@@ -207,6 +207,81 @@ All admins must be updated to point to the same folder.
 
 ---
 
+## Code Signing (Windows)
+
+Without a code-signing certificate, Windows SmartScreen shows
+**"Windows protected your PC — unrecognized app"** every time an admin runs the
+installer. They must click **More info → Run anyway**, which looks alarming.
+Signing the installer eliminates that warning.
+
+### 1 — Purchase a certificate
+
+| Type | SmartScreen behaviour | Typical cost | Hardware token needed? |
+|---|---|---|---|
+| **EV** (Extended Validation) | Trusted immediately on first install | $300–500 / yr | Yes — USB key (YubiKey, SafeNet, etc.) |
+| **OV** (Organization Validation) | Trusted after ~100–500 installs across users | $100–200 / yr | No |
+
+Recommended vendors: **DigiCert**, **Sectigo**, **GlobalSign**, **SSL.com**.
+
+> For the fastest SmartScreen bypass, choose **EV**. For a lower-cost option
+> that works once you've distributed to enough users, choose **OV**.
+
+### 2 — Export the certificate as a .pfx file
+
+After the CA issues your certificate and it is installed on the signing machine:
+
+1. Open **Certificate Manager** (`Win + R` → `certmgr.msc`).
+2. Find your certificate under **Personal → Certificates**.
+3. Right-click → **All Tasks → Export…**
+4. Choose **Yes, export the private key** → **PFX / PKCS #12**.
+5. Set a strong password and save the file, e.g. `napa-courier.pfx`.
+6. Store it somewhere secure (it is a private key — treat it like a password).
+
+> **EV certificates** are stored on a USB hardware token, not exportable.
+> Use the token-based signing flow instead (see your CA's documentation for
+> the `signtool.exe` command-line approach, then set `WIN_CSC_LINK` to the
+> token path as described by electron-builder's hardware-token docs).
+
+### 3 — Set environment variables before building
+
+electron-builder reads two environment variables at build time. Set them in
+your terminal **before** running `npm run package:win`:
+
+**Command Prompt:**
+```cmd
+set WIN_CSC_LINK=C:\path\to\napa-courier.pfx
+set WIN_CSC_KEY_PASSWORD=your_pfx_password
+npm run package:win
+```
+
+**PowerShell:**
+```powershell
+$env:WIN_CSC_LINK     = "C:\path\to\napa-courier.pfx"
+$env:WIN_CSC_KEY_PASSWORD = "your_pfx_password"
+npm run package:win
+```
+
+- `WIN_CSC_LINK` — absolute path to your `.pfx` file (or a base64-encoded
+  copy of the file, which is useful for CI pipelines).
+- `WIN_CSC_KEY_PASSWORD` — the password you chose when exporting the `.pfx`.
+
+If either variable is missing, electron-builder skips signing and the
+installer will still trigger SmartScreen. Watch for the line
+`"code signing is disabled"` in build output.
+
+### 4 — Verify the signature
+
+After the build, right-click the resulting `.exe` in File Explorer →
+**Properties → Digital Signatures tab**. Your organisation name should appear
+in the signatures list.
+
+You can also verify from a Command Prompt:
+```cmd
+signtool verify /pa /v "dist-installer\NAPA Courier Admin Setup 1.0.0.exe"
+```
+
+---
+
 ## Troubleshooting
 
 ### "DROPBOX_APP_KEY is not configured"
