@@ -20,6 +20,50 @@ Data is stored in a **shared Dropbox folder** — all five admins read and write
 
 ---
 
+## Automated CI Builds (GitHub Actions)
+
+The repository includes a GitHub Actions workflow (`.github/workflows/build-windows.yml`) that builds, signs, and publishes the Windows installer automatically — **no local Node.js required**.
+
+### How a release build works
+
+1. **Tag the commit** you want to release, using a `v`-prefixed version tag:
+   ```
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+2. GitHub Actions picks up the tag, runs `npm run package:win` on a `windows-latest` runner, and uploads the signed `.exe` as a **GitHub Release asset**.
+3. Download the installer from the **Releases** page of the repository — no build tools needed.
+
+### Required repository secrets
+
+Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+| Secret name | Value |
+|---|---|
+| `WIN_CSC_LINK` | Base64-encoded contents of your `.pfx` certificate file (see below) |
+| `WIN_CSC_KEY_PASSWORD` | Password you set when exporting the `.pfx` |
+| `DROPBOX_APP_KEY` | Your Dropbox app key (same one used in `.env`) |
+
+> If `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` are not set the build still succeeds, but the installer will be unsigned and Windows SmartScreen will warn on first run.
+
+#### Encoding the .pfx for `WIN_CSC_LINK`
+
+electron-builder accepts a base64-encoded certificate string in CI. To encode your `.pfx`:
+
+**PowerShell (Windows):**
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\napa-courier.pfx")) | clip
+```
+Paste the clipboard contents as the `WIN_CSC_LINK` secret value.
+
+**macOS / Linux:**
+```bash
+base64 -i napa-courier.pfx | pbcopy   # macOS
+base64 -w 0 napa-courier.pfx          # Linux — copy output manually
+```
+
+---
+
 ## Platform Support
 
 | Platform | Output | Build machine required |
