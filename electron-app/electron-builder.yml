@@ -113,4 +113,9 @@ dmg:
     width: 540
     height: 380
 
-publish: null
+publish:
+  provider: github
+  owner: Demonistar
+  repo: napa_courier_videos
+  # GH_TOKEN must be set in your terminal session before running npm run publish:win
+  # or publish:mac. Never put it in .env or any file — see README for instructions.

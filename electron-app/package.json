@@ -12,12 +12,15 @@
     "package": "npm run build && electron-builder",
     "package:win": "npm run build && electron-builder --win",
     "package:mac": "npm run build && electron-builder --mac",
+    "publish:win": "npm run build && electron-builder --win --publish always",
+    "publish:mac": "npm run build && electron-builder --mac --publish always",
     "package:dir": "npm run build && electron-builder --dir",
     "package:dir:win": "npm run build && electron-builder --win --dir",
     "package:dir:mac": "npm run build && electron-builder --mac --dir",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-resizable-panels": "^2.1.7",

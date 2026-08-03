@@ -238,6 +238,103 @@ To check: Apple menu → About This Mac → look for "Apple M" (arm64) or "Intel
 
 ---
 
+## Publishing a New Version (Automatic Updates)
+
+Once the app is installed on an admin's machine, **it updates itself automatically** — no manual reinstall needed. Here's how the full cycle works.
+
+### How automatic updates work
+
+1. You publish a new version to GitHub Releases (see steps below).
+2. Every running copy of the app checks GitHub on launch.
+3. If a newer version is available, it downloads it silently in the background.
+4. When the download finishes, the app shows a dialog:
+   > *"A new version of NAPA Courier Admin has been downloaded. Restart now to install the update, or it will be installed automatically the next time you quit the app."*
+5. The admin clicks **Restart Now** (or the update installs automatically on the next app quit).
+
+No admin needs to visit a website, download a file, or run an installer again.
+
+---
+
+### How to publish a new version
+
+**Every time you want to push an update to all five admins, follow these steps.**
+
+#### Step 1 — Bump the version number
+
+Open `package.json` and increase the `"version"` field:
+
+```json
+"version": "1.0.1"
+```
+
+Use [semantic versioning](https://semver.org): `1.0.0` → `1.0.1` for a bug fix, `1.1.0` for a new feature, `2.0.0` for a major change.
+
+#### Step 2 — Set your GitHub token in the terminal
+
+You need a GitHub Personal Access Token with **`repo` scope** (or `write:packages` for private repos). Create one at [github.com/settings/tokens](https://github.com/settings/tokens).
+
+> **⚠ Security — read this carefully:**
+> The token must **only** exist as a temporary environment variable in your terminal session. Do NOT put it in `.env`, do NOT commit it to git, and do NOT save it to any file. It is a secret that grants write access to the GitHub repository.
+
+Set it in your terminal **for the current session only**:
+
+**Command Prompt (Windows):**
+```cmd
+set GH_TOKEN=ghp_your_token_here
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:GH_TOKEN = "ghp_your_token_here"
+```
+
+**macOS / Linux (Terminal):**
+```bash
+export GH_TOKEN=ghp_your_token_here
+```
+
+The token is gone when you close the terminal window. That's intentional.
+
+#### Step 3 — Build and publish
+
+In the same terminal window where you set `GH_TOKEN`:
+
+**Windows** (run on a Windows machine):
+```cmd
+npm run publish:win
+```
+
+**macOS** (run on a Mac):
+```bash
+npm run publish:mac
+```
+
+This runs `electron-vite build` followed by `electron-builder --publish always`, which:
+1. Builds the app
+2. Creates the installer
+3. Uploads the installer + a `latest.yml` manifest to the GitHub Releases page under a new release named after the version (e.g. `v1.0.1`)
+
+When the upload finishes, the update is live — all five installed copies will see it on their next launch.
+
+#### Step 4 — Verify
+
+Go to the GitHub repository's **Releases** page. You should see a new release (e.g. `v1.0.1`) with:
+- `NAPA Courier Admin Setup 1.0.1.exe` (Windows installer)
+- `latest.yml` (the update manifest the app reads to check for updates)
+
+If either file is missing, the auto-updater won't work for that platform.
+
+---
+
+### GitHub token vs. Dropbox App Key — what goes where
+
+| Value | Where it lives | Why |
+|---|---|---|
+| `DROPBOX_APP_KEY` | `.env` file (checked into git is fine for internal tools) | Embedded in the packaged app at build time — not a secret |
+| `GH_TOKEN` | Terminal session only — **never on disk** | Grants write access to the GitHub repo — must not ship in the app |
+
+---
+
 ## First Run (for each admin)
 
 1. **Windows:** Open from the Start menu or desktop shortcut.

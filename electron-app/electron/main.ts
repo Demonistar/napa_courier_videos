@@ -7,7 +7,9 @@ import {
   nativeTheme,
   Menu,
   MenuItem,
+  dialog,
 } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -738,13 +740,51 @@ function createMainWindow(): BrowserWindow {
   return win;
 }
 
+// ─── Auto-updater ─────────────────────────────────────────────────────────────
+
+function initAutoUpdater(win: BrowserWindow): void {
+  // Only run in the packaged app — dev builds have no update feed.
+  if (!app.isPackaged) return;
+
+  // Download silently in the background; prompt only when ready to install.
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-downloaded', () => {
+    dialog
+      .showMessageBox(win, {
+        type: 'info',
+        title: 'Update ready',
+        message: 'A new version of NAPA Courier Admin has been downloaded.',
+        detail: 'Restart now to install the update, or it will be installed automatically the next time you quit the app.',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+
+  // Log errors silently — don't surface network/update-server issues to the user.
+  autoUpdater.on('error', (err) => {
+    console.error('[auto-updater] error:', err?.message ?? err);
+  });
+
+  // Fire-and-forget; errors are caught above.
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[auto-updater] checkForUpdates failed:', err?.message ?? err);
+  });
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
   buildAppMenu();
   registerIpcHandlers();
-  createMainWindow();
+  const win = createMainWindow();
+  initAutoUpdater(win);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
