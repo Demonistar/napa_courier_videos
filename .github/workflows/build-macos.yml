@@ -61,18 +61,12 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build, package, and publish to GitHub Releases ────────────────────
+      # ── 6. Build and package (no upload yet) ─────────────────────────────────
       #
-      # `--publish always` tells electron-builder to:
-      #   1. Build both DMG files (Intel x64 + Apple Silicon arm64)
-      #   2. Create (or update) the GitHub Release for this tag
-      #   3. Upload the DMGs AND the `latest-mac.yml` update manifest
-      #
-      # The update manifest is what allows installed copies of the app to detect
-      # new versions via electron-updater. Without it, auto-updates won't work
-      # on Mac.
-      #
-      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
+      # Builds both DMG files (Intel x64 + Apple Silicon arm64) and runs the
+      # notarization afterSign hook if the APPLE_* secrets are present.
+      # `--publish never` deliberately withholds the upload so that step 7 can
+      # verify the code signature before anything reaches GitHub Releases.
       #
       # Code signing (prevents Gatekeeper "unverified developer" warning):
       #   CSC_LINK          — base64-encoded Developer ID Application .p12 (repo secret)
@@ -89,14 +83,71 @@ jobs:
       #                                 developer.apple.com/account → Membership
       #
       # DROPBOX_APP_KEY is required for the app to connect to Dropbox at runtime.
-      - name: Build, package, and publish
+      - name: Build and package
         working-directory: electron-app
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: npm run publish:mac
+        run: npm run build && electron-builder --mac --publish never
+
+      # ── 7. Verify code signature ──────────────────────────────────────────────
+      #
+      # Checks that both .app bundles carry a valid Developer ID signature before
+      # any artifact is uploaded.  If CSC_LINK / CSC_KEY_PASSWORD were absent or
+      # mis-configured, electron-builder silently skips signing and exits 0; this
+      # step catches that case and fails the workflow so no unsigned installer
+      # reaches admins.
+      #
+      # `codesign` is a macOS-native tool present on every macos-latest runner —
+      # no extra installs required.
+      #
+      # electron-builder places each .app in a per-arch subdirectory of the
+      # output folder (dist-installer/):
+      #   mac/       — Intel (x64)
+      #   mac-arm64/ — Apple Silicon (arm64)
+      - name: Verify code signature
+        working-directory: electron-app
+        run: |
+          APP_NAME="NAPA Courier Admin.app"
+          for APP_DIR in "dist-installer/mac" "dist-installer/mac-arm64"; do
+            APP_PATH="${APP_DIR}/${APP_NAME}"
+            if [ ! -d "${APP_PATH}" ]; then
+              echo "Error: expected .app not found at '${APP_PATH}'" >&2
+              exit 1
+            fi
+            echo "Verifying signature: ${APP_PATH}"
+            codesign --verify --deep --strict "${APP_PATH}"
+            echo "✓ Signature valid: ${APP_PATH}"
+          done
+
+      # ── 8. Publish to GitHub Releases ─────────────────────────────────────────
+      #
+      # Creates (or updates) the GitHub Release for this tag and uploads:
+      #   • Both .dmg installers (Intel + Apple Silicon)
+      #   • latest-mac.yml — the electron-updater manifest that lets installed
+      #     copies of the app detect and download new versions automatically.
+      #     Without this file, auto-updates won't work on Mac.
+      #
+      # This step runs only after the signature check in step 7 passes, so
+      # unsigned builds can never reach the release.
+      #
+      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
+      - name: Publish to GitHub Releases
+        working-directory: electron-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Create the release if it does not yet exist; ignore the error if it
+          # was already created by a concurrent job (e.g. the Windows workflow).
+          gh release create "${TAG}" --title "${TAG}" --generate-notes 2>/dev/null || true
+          # Upload the DMGs and the electron-updater manifest, replacing any
+          # previously uploaded files with the same name (--clobber).
+          gh release upload "${TAG}" \
+            dist-installer/*.dmg \
+            dist-installer/latest-mac.yml \
+            --clobber
