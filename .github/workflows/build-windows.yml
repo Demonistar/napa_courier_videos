@@ -66,29 +66,116 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build, package, and publish to GitHub Releases ────────────────────
+      # ── 6. Build and package (without publishing yet) ────────────────────────
       #
-      # `--publish always` tells electron-builder to:
-      #   1. Build the NSIS installer (.exe)
-      #   2. Create (or update) the GitHub Release for this tag
-      #   3. Upload the installer AND the `latest.yml` update manifest
-      #
-      # The update manifest is what allows installed copies of the app to detect
-      # new versions via electron-updater. Without it, auto-updates won't work.
-      #
-      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
+      # We intentionally separate build from publish so the signature
+      # verification step (below) can fail the workflow before any unsigned
+      # artifact reaches GitHub Releases.
       #
       # Code signing (prevents SmartScreen "unrecognized app" warning):
       #   WIN_CSC_LINK          — base64-encoded .pfx certificate (repo secret)
       #   WIN_CSC_KEY_PASSWORD  — password for the .pfx (repo secret)
       #
-      # If neither signing secret is set the build still succeeds but the
-      # installer will be unsigned (SmartScreen will warn on first run).
-      - name: Build, package, and publish
+      # If either signing secret is absent, electron-builder silently skips
+      # signing and exits 0.  The next step catches that case.
+      - name: Build and package
         working-directory: electron-app
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: npm run publish:win
+        run: npm run build && electron-builder --win --publish never
+
+      # ── 7. Verify Authenticode signature ─────────────────────────────────────
+      #
+      # `signtool verify /pa` checks that the installer carries a valid
+      # Authenticode signature issued by a trusted CA.  It exits non-zero
+      # (failing the workflow) when:
+      #   • the file is unsigned (secrets were absent or misconfigured), or
+      #   • the signature is malformed or the certificate has expired.
+      #
+      # This step runs on the windows-latest runner where signtool.exe ships
+      # as part of the pre-installed Windows SDK.
+      #
+      # The verified installer path is written to a step output so the publish
+      # step below can upload exactly the same file that was verified — without
+      # re-globbing or picking up unintended executables.
+      - name: Verify Authenticode signature
+        id: verify-signature
+        shell: pwsh
+        working-directory: electron-app
+        run: |
+          # Locate the top-level NSIS installer (not win-unpacked/ executables).
+          # -File and no -Recurse ensure we stay in dist-installer/ itself.
+          $exe = Get-ChildItem -Path dist-installer -Filter "*.exe" -File |
+                 Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "No installer .exe found in dist-installer/ — build may have failed."
+            exit 1
+          }
+          Write-Host "Verifying signature on: $($exe.FullName)"
+
+          # signtool.exe is on PATH on windows-latest runners (Windows SDK)
+          & signtool verify /pa "$($exe.FullName)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error @"
+          Authenticode signature verification FAILED.
+          The installer '$($exe.Name)' is unsigned or has an invalid signature.
+          Ensure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are set as repository
+          secrets and contain a valid, unexpired .pfx certificate.
+          The unsigned installer has NOT been uploaded to GitHub Releases.
+          "@
+            exit 1
+          }
+          Write-Host "Signature OK — proceeding to publish."
+
+          # Expose the verified installer name to the publish step via output.
+          echo "INSTALLER_NAME=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+      # ── 8. Publish to GitHub Releases ────────────────────────────────────────
+      #
+      # Only reached when the signature check above passes.
+      # Uploads exactly the verified installer (.exe), the electron-updater
+      # manifest (latest.yml), and the blockmap used for differential updates.
+      #
+      # GH_TOKEN — GitHub Actions provides this automatically; no secret needed.
+      #
+      # The release tag is consumed from an env variable (GIT_TAG) rather than
+      # being interpolated directly into PowerShell source, preventing a
+      # workflow-command injection via a crafted tag name.
+      - name: Publish to GitHub Releases
+        shell: pwsh
+        working-directory: electron-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAG: ${{ github.ref_name }}
+          INSTALLER_NAME: ${{ steps.verify-signature.outputs.INSTALLER_NAME }}
+        run: |
+          # Validate the tag looks like a SemVer release before using it as a
+          # CLI argument (mirrors the validation in the "Set version from tag"
+          # step so a malformed tag cannot inject into the gh command).
+          if ($env:GIT_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            Write-Error "GIT_TAG '$($env:GIT_TAG)' is not a valid vX.Y.Z release tag."
+            exit 1
+          }
+
+          # Create the release if it does not already exist.
+          gh release view $env:GIT_TAG 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GIT_TAG `
+              --title $env:GIT_TAG `
+              --generate-notes `
+              --draft=false
+          }
+
+          # Upload exactly the verified installer plus the electron-updater
+          # artifacts (latest.yml manifest and .blockmap for delta updates).
+          # No -Recurse: all three items live at the top level of dist-installer/.
+          $installer = Join-Path "dist-installer" $env:INSTALLER_NAME
+          $manifest  = Join-Path "dist-installer" "latest.yml"
+          $blockmap  = Join-Path "dist-installer" "$($env:INSTALLER_NAME).blockmap"
+
+          $uploadFiles = @($installer, $manifest)
+          if (Test-Path $blockmap) { $uploadFiles += $blockmap }
+
+          gh release upload $env:GIT_TAG $uploadFiles --clobber
