@@ -31,7 +31,21 @@ jobs:
         working-directory: electron-app
         run: npm ci
 
-      # ── 4. Copy shared components from the web app source ────────────────────
+      # ── 4. Stamp version from release tag ────────────────────────────────────
+      #
+      # Strips the leading "v" from the tag (e.g. v1.2.0 → 1.2.0) and writes it
+      # into electron-app/package.json so electron-builder picks it up for the
+      # installer filename and About screen.  --no-git-tag-version prevents npm
+      # from trying to create a new git tag inside the runner.
+      - name: Set version from tag
+        shell: bash
+        working-directory: electron-app
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version
+
+      # ── 5. Copy shared components from the web app source ────────────────────
       #
       # setup-components.sh copies shadcn/ui primitives, tree, form, and other
       # shared code from artifacts/napa-courier-admin/src/ into electron-app/src/.
@@ -41,7 +55,7 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 5. Build & package ────────────────────────────────────────────────────
+      # ── 6. Build & package ────────────────────────────────────────────────────
       #
       # WIN_CSC_LINK    — base64-encoded .pfx certificate stored as a repo secret.
       #                   electron-builder detects the "base64," prefix and decodes
