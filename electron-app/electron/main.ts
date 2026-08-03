@@ -603,6 +603,14 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
+
+  ipcMain.handle('app:getUpdateStatus', () => ({
+    updateDownloaded: _updateDownloaded,
+  }));
+
+  ipcMain.handle('app:quitAndInstall', () => {
+    if (_updateDownloaded) autoUpdater.quitAndInstall();
+  });
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
@@ -838,6 +846,8 @@ function initAutoUpdater(win: BrowserWindow): void {
     _updateDownloaded = true;
     _manualCheckPending = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
+    // Push an IPC event to the renderer so it can show the in-app update badge.
+    win.webContents.send('app:updateReady');
     showRestartDialog(win);
   });
 

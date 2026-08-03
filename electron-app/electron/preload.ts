@@ -73,6 +73,16 @@ const api = {
   app: {
     getVersion: (): Promise<string> =>
       ipcRenderer.invoke('app:getVersion'),
+    getUpdateStatus: (): Promise<{ updateDownloaded: boolean }> =>
+      ipcRenderer.invoke('app:getUpdateStatus'),
+    onUpdateReady: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('app:updateReady', handler);
+      // Return a cleanup function so callers can remove the listener.
+      return () => ipcRenderer.removeListener('app:updateReady', handler);
+    },
+    quitAndInstall: (): Promise<void> =>
+      ipcRenderer.invoke('app:quitAndInstall'),
   },
 };
 

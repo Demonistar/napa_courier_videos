@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Cloud, CloudOff, FolderOpen, LogOut } from 'lucide-react';
+import { Cloud, CloudOff, FolderOpen, LogOut, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,6 +34,7 @@ export function SettingsPanel({
   const [folderSaved, setFolderSaved] = useState(false);
   const [localUser, setLocalUser] = useState(currentUser);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
 
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
@@ -46,6 +47,19 @@ export function SettingsPanel({
     });
     window.electronAPI.app.getVersion().then(setAppVersion);
   }, [open]);
+
+  // Hydrate update-ready state on mount, then keep it current via the push event.
+  // getUpdateStatus() catches the case where the update downloaded before this
+  // component mounted (e.g. during login screen or renderer reload).
+  useEffect(() => {
+    window.electronAPI.app.getUpdateStatus().then(({ updateDownloaded }) => {
+      if (updateDownloaded) setUpdateReady(true);
+    });
+    const cleanup = window.electronAPI.app.onUpdateReady(() => {
+      setUpdateReady(true);
+    });
+    return cleanup;
+  }, []);
 
   const saveFolderPath = async () => {
     await window.electronAPI.settings.set({ dropboxFolderPath: folderPath });
@@ -163,10 +177,32 @@ export function SettingsPanel({
           )}
         </div>
 
+        {/* ── Update-ready notice ──────────────────────────────────── */}
+        {updateReady && (
+          <div className="flex items-center justify-between gap-3 p-3 border border-green-200 bg-green-50 rounded-md">
+            <p className="text-xs text-green-800 font-medium">
+              Update ready — restart to install
+            </p>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-green-600 hover:bg-green-700 text-white shrink-0"
+              onClick={() => window.electronAPI.app.quitAndInstall()}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Restart
+            </Button>
+          </div>
+        )}
+
         {/* ── Version + easter egg ─────────────────────────────────── */}
         <div className="flex items-center justify-between pt-2">
           <p className="text-[10px] text-muted-foreground/50 select-none">
             {appVersion ? `v${appVersion}` : ''}
+            {updateReady && (
+              <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-medium text-green-700 leading-none">
+                Update ready
+              </span>
+            )}
           </p>
           <p className="text-[10px] text-muted-foreground/30 select-none tracking-wide">
             Powered by Craig ✦
