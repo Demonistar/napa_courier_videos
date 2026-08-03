@@ -49,13 +49,17 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 | `DROPBOX_APP_KEY` | Both | **Required** | Your Dropbox app key (same one used in `.env`) |
 | `WIN_CSC_LINK` | Windows | Optional | Base64-encoded `.pfx` certificate (see below) |
 | `WIN_CSC_KEY_PASSWORD` | Windows | Optional | Password for the `.pfx` |
+| `CSC_LINK` | macOS | Optional | Base64-encoded Developer ID Application `.p12` certificate (see below) |
+| `CSC_KEY_PASSWORD` | macOS | Optional | Password for the `.p12` |
 | `APPLE_ID` | macOS | Optional | Apple ID email (e.g. `you@example.com`) |
 | `APPLE_APP_SPECIFIC_PASSWORD` | macOS | Optional | App-specific password from [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security |
 | `APPLE_TEAM_ID` | macOS | Optional | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) → Membership |
 
 > **Windows signing:** If `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` are not set the build still succeeds, but the installer will be unsigned and Windows SmartScreen will warn on first run.
 >
-> **macOS notarization:** If the three `APPLE_*` secrets are not set the build still succeeds and produces unsigned `.dmg` files. Gatekeeper will show "developer cannot be verified" on first launch — admins can bypass once with right-click → Open → Open. Set all three secrets to enable notarization, which eliminates the warning entirely.
+> **macOS signing:** If `CSC_LINK` / `CSC_KEY_PASSWORD` are not set the build still succeeds, but the `.dmg` will be unsigned and Gatekeeper will show "developer cannot be verified" on first launch. Admins can bypass once with right-click → Open → Open.
+>
+> **macOS notarization:** If the three `APPLE_*` secrets are not set the build skips notarization. Notarization requires a signed app (`CSC_LINK` + `CSC_KEY_PASSWORD` must also be set). With all five macOS secrets set, the app is fully signed and notarized — no Gatekeeper warning at all.
 
 #### Encoding the .pfx for `WIN_CSC_LINK` (Windows only)
 
@@ -337,6 +341,94 @@ signtool verify /pa /v "dist-installer\NAPA Courier Admin Setup 1.0.0.exe"
 
 ---
 
+## Code Signing (macOS)
+
+Without a Developer ID Application certificate, macOS Gatekeeper shows
+**"NAPA Courier Admin cannot be opened because the developer cannot be verified"**
+every time an admin opens the `.dmg` for the first time. Adding a certificate
+and notarizing the app eliminates that warning entirely.
+
+### 1 — Join the Apple Developer Program
+
+A paid **Apple Developer Program** membership ($99/yr) is required to obtain
+a Developer ID Application certificate. Sign up at
+[developer.apple.com/programs](https://developer.apple.com/programs).
+
+### 2 — Create a Developer ID Application certificate
+
+1. Go to [developer.apple.com/account](https://developer.apple.com/account) →
+   **Certificates, Identifiers & Profiles** → **Certificates** → **+**.
+2. Choose **Developer ID Application** (not "Distribution").
+3. Follow the prompts to generate a Certificate Signing Request (CSR) from
+   Keychain Access, upload it, and download the resulting `.cer` file.
+4. Double-click the `.cer` to install it into your Keychain.
+
+### 3 — Export the certificate as a .p12 file
+
+1. Open **Keychain Access** on your Mac.
+2. In **My Certificates**, find **"Developer ID Application: Your Name (TEAMID)"**.
+3. Right-click → **Export "Developer ID Application: …"**.
+4. Choose **Personal Information Exchange (.p12)** format.
+5. Set a strong password and save as, e.g., `DeveloperIDApplication.p12`.
+6. Store it somewhere secure — it contains your private key.
+
+### 4 — Encode the certificate for CI
+
+GitHub Actions secrets cannot store binary files, so encode the `.p12` as
+base64:
+
+**macOS:**
+```bash
+base64 -i DeveloperIDApplication.p12 | pbcopy   # copies to clipboard
+```
+
+**Linux:**
+```bash
+base64 -w 0 DeveloperIDApplication.p12           # copy the output manually
+```
+
+### 5 — Add the GitHub repository secrets
+
+Go to **Settings → Secrets and variables → Actions → New repository secret**
+and add all five macOS secrets:
+
+| Secret name | Value |
+|---|---|
+| `CSC_LINK` | The base64 string from step 4 |
+| `CSC_KEY_PASSWORD` | The password you chose when exporting the `.p12` |
+| `APPLE_ID` | Your Apple ID email (e.g. `you@example.com`) |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) → Account → Sign-In and Security → App-Specific Passwords |
+| `APPLE_TEAM_ID` | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) → Membership Details |
+
+> **Note:** `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` enable
+> notarization — the final step that submits the signed app to Apple's servers
+> so Gatekeeper trusts it with **no warning at all**, on any Mac.
+> Notarization requires a signed app, so all five secrets must be set together.
+
+### 6 — Trigger a build
+
+Push a `v`-prefixed tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`).
+The CI workflow picks up `CSC_LINK` / `CSC_KEY_PASSWORD`, signs the `.app`
+bundles, then calls the `afterSign` hook (`electron/notarize.cjs`) which
+notarizes them with Apple before the `.dmg` files are created.
+
+### 7 — Verify signing and notarization
+
+Download the `.dmg` from the GitHub Releases page and run:
+
+```bash
+# Check the .app is signed
+codesign --verify --deep --strict --verbose=2 "NAPA Courier Admin.app"
+
+# Check the notarization ticket is stapled
+spctl --assess --type exec --verbose "NAPA Courier Admin.app"
+```
+
+The second command should print `source=Notarized Developer ID` with exit
+code 0 when fully signed and notarized.
+
+---
+
 ## Troubleshooting
 
 ### "DROPBOX_APP_KEY is not configured"
@@ -365,7 +457,7 @@ Common causes:
 This is fixed in the current build (a native Edit menu is wired up in `electron/main.ts`). If you see this on an older build, rebuild from the latest source.
 
 ### App is blocked on macOS ("developer cannot be verified")
-This is macOS Gatekeeper. For a quick workaround: **right-click** the app → **Open** → **Open**. This bypasses the warning permanently for that machine. For proper distribution without any warning, the app needs to be code-signed and notarized with an Apple Developer account (see Task #8 in the project task list).
+This is macOS Gatekeeper. For a quick workaround: **right-click** the app → **Open** → **Open**. This bypasses the warning permanently for that machine. For proper distribution without any warning, the app needs to be code-signed and notarized — see the **Code Signing (macOS)** section above for the full setup guide.
 
 ### Token is corrupted / won't sign in
 Delete the encrypted token file and sign in again.

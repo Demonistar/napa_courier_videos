@@ -67,13 +67,26 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # ── Notarization (optional — suppresses Gatekeeper warning on first launch) ──
+  # ── Code signing (prevents Gatekeeper "unverified developer" warning) ────────
+  # electron-builder reads these environment variables automatically at build
+  # time. Set them as GitHub repository secrets (see build-macos.yml and README).
   #
+  #   CSC_LINK          — base64-encoded Developer ID Application .p12 certificate
+  #                       exported from Keychain Access. Obtain from a paid Apple
+  #                       Developer account (developer.apple.com → Certificates).
+  #                       Encode for CI:
+  #                         base64 -i DeveloperIDApplication.p12 | pbcopy  # macOS
+  #                         base64 -w 0 DeveloperIDApplication.p12          # Linux
+  #   CSC_KEY_PASSWORD  — password chosen when exporting the .p12
+  #
+  # Both variables must be set. If either is missing, electron-builder skips
+  # signing and the resulting .dmg will trigger Gatekeeper.
+  #
+  # ── Notarization (optional — submits signed app to Apple for approval) ───────
   # The afterSign hook (electron/notarize.cjs) submits the signed .app to
   # Apple's servers so Gatekeeper trusts it on any Mac without any warnings.
-  # It is a no-op unless all three secrets below are set in the environment.
-  #
-  # Set these as GitHub repository secrets to enable notarization in CI:
+  # It is a no-op unless all three Apple secrets below are set. Notarization
+  # requires the app to already be signed (CSC_LINK + CSC_KEY_PASSWORD).
   #
   #   APPLE_ID                    — Apple ID email (e.g. you@example.com)
   #   APPLE_APP_SPECIFIC_PASSWORD — app-specific password from appleid.apple.com
@@ -88,7 +101,7 @@ mac:
 afterSign: electron/notarize.cjs
 
 dmg:
-  sign: false                   # set to true once you have an Apple Developer certificate
+  sign: false                   # DMG container signing; the .app inside is signed via CSC_LINK
   contents:
     - x: 130
       y: 220
