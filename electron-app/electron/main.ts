@@ -361,7 +361,7 @@ h1{color:#16a34a;margin:0 0 .5rem}p{color:#6b7280;margin:0}</style></head>
 // ─── Dropbox data operations ──────────────────────────────────────────────────
 
 function folderPath(folder: string, file: string): string {
-  return `${folder.replace(/\/$/, '')}/${file}`;
+  return `${folder.replace(/\/$/, '')}/NAPA Admin Data/${file}`;
 }
 
 async function loadStagingFile(folder: string) {
