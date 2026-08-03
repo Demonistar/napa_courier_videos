@@ -36,6 +36,7 @@ minimumReleaseAgeExclude:
 
 packages:
   - artifacts/*
+  - electron-app
   - lib/*
   - lib/integrations/*
   - scripts
@@ -63,6 +64,7 @@ catalog:
   tailwindcss: ^4.1.14
   tsx: ^4.21.0
   vite: ^7.3.2
+  vitest: ^4.1.10
   wouter: ^3.3.5
   zod: ^3.25.76
 
@@ -75,6 +77,9 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
+  # electron-builder pulls in tar@6.2.1 which is blocked by the package firewall;
+  # override to the current stable tar@7 so the store can be populated.
+  tar: "^7.4.3"
   # replit uses linux-x64 only, we can exclude all other platforms
   "esbuild>@esbuild/darwin-arm64": "-"
   "esbuild>@esbuild/darwin-x64": "-"

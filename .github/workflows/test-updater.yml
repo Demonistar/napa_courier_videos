@@ -1,0 +1,57 @@
+name: Updater tests
+
+# Run the electron-app unit test suite on every push or pull request that
+# touches code under electron-app/, workspace manifests, or this workflow
+# file itself.  The tests exercise the auto-updater logic in Node (no
+# Electron binary needed) and complete in under a minute on a standard runner.
+
+on:
+  push:
+    paths:
+      - "electron-app/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/test-updater.yml"
+  pull_request:
+    paths:
+      - "electron-app/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/test-updater.yml"
+
+jobs:
+  updater-tests:
+    name: Run updater unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      # ── 3. Install workspace dependencies ────────────────────────────────────
+      #
+      # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
+      # electron@31.x runs post-install scripts; the workspace's
+      # onlyBuiltDependencies list already excludes it from auto-build, so the
+      # install completes without a full Electron download.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── 4. Run updater tests ─────────────────────────────────────────────────
+      #
+      # Targets only the electron-app package.  vitest runs in Node environment
+      # (no browser, no Electron binary) so this job works on any Linux runner.
+      - name: Run updater tests
+        run: pnpm --filter napa-courier-admin test
