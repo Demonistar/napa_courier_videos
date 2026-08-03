@@ -83,9 +83,19 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [updateReady, setUpdateReady] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
+
+  // Hydrate update-ready state on mount and keep it current via push event.
+  useEffect(() => {
+    window.electronAPI.app.getUpdateStatus().then(({ updateDownloaded }) => {
+      if (updateDownloaded) setUpdateReady(true);
+    });
+    const cleanup = window.electronAPI.app.onUpdateReady(() => setUpdateReady(true));
+    return cleanup;
+  }, []);
 
   const { isTourActive, startTour, endTour } = useTour();
 
@@ -234,6 +244,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onOpenBackup={() => setBackupOpen(true)}
         onOpenImport={() => setImportOpen(true)}
         dropboxUser={dropboxUser}
+        updateReady={updateReady}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -393,6 +404,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onDropboxRefresh={dropboxRefresh}
         currentUser={state.currentUser}
         onCurrentUserChange={setCurrentUser}
+        updateReady={updateReady}
       />
 
       {/* Backup & Restore */}

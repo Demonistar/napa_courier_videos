@@ -20,6 +20,7 @@ interface SettingsPanelProps {
   onDropboxRefresh: () => void;
   currentUser: string;
   onCurrentUserChange: (name: string) => void;
+  updateReady?: boolean;
 }
 
 export function SettingsPanel({
@@ -29,12 +30,12 @@ export function SettingsPanel({
   onDropboxDisconnect,
   currentUser,
   onCurrentUserChange,
+  updateReady = false,
 }: SettingsPanelProps) {
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
   const [localUser, setLocalUser] = useState(currentUser);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [updateReady, setUpdateReady] = useState(false);
 
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
@@ -47,19 +48,6 @@ export function SettingsPanel({
     });
     window.electronAPI.app.getVersion().then(setAppVersion);
   }, [open]);
-
-  // Hydrate update-ready state on mount, then keep it current via the push event.
-  // getUpdateStatus() catches the case where the update downloaded before this
-  // component mounted (e.g. during login screen or renderer reload).
-  useEffect(() => {
-    window.electronAPI.app.getUpdateStatus().then(({ updateDownloaded }) => {
-      if (updateDownloaded) setUpdateReady(true);
-    });
-    const cleanup = window.electronAPI.app.onUpdateReady(() => {
-      setUpdateReady(true);
-    });
-    return cleanup;
-  }, []);
 
   const saveFolderPath = async () => {
     await window.electronAPI.settings.set({ dropboxFolderPath: folderPath });
