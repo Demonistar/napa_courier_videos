@@ -762,6 +762,14 @@ let _updateDownloaded = false;
 let _manualCheckPending = false;
 let _checkForUpdatesMenuItem: Electron.MenuItem | null = null;
 
+/** Network-related error codes that indicate the update server was unreachable. */
+const NETWORK_ERROR_CODES = ['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENETUNREACH', 'EAI_AGAIN'];
+
+function isNetworkError(err: Error): boolean {
+  const msg = (err?.message ?? '') + (((err as Error & { code?: string })?.code) ?? '');
+  return NETWORK_ERROR_CODES.some((code) => msg.includes(code));
+}
+
 function showRestartDialog(win: BrowserWindow): void {
   dialog
     .showMessageBox(win, {
@@ -798,15 +806,10 @@ function checkForUpdatesManually(win: BrowserWindow): void {
   _manualCheckPending = true;
   if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = false;
   autoUpdater.checkForUpdates().catch((err) => {
-    _manualCheckPending = false;
-    if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
-    console.error('[auto-updater] manual check failed:', err?.message ?? err);
-    dialog.showMessageBox(win, {
-      type: 'warning',
-      title: 'Update check failed',
-      message: 'Could not check for updates.',
-      detail: (err as Error)?.message ?? 'Network error. Please try again later.',
-    });
+    // The 'error' event fires before the promise rejects in electron-updater 6.x,
+    // so state cleanup and dialog display are both handled there. This catch is
+    // a safety net that only logs to avoid an unhandled-rejection warning.
+    console.error('[auto-updater] manual check promise rejected:', err?.message ?? err);
   });
 }
 
@@ -838,11 +841,27 @@ function initAutoUpdater(win: BrowserWindow): void {
     showRestartDialog(win);
   });
 
-  // Log errors silently — don't surface network/update-server hiccups to the user.
+  // Surface errors to the user only when they triggered the check manually.
+  // Startup (automatic) checks stay silent on any error — network hiccups at
+  // launch should not bother the user.
   autoUpdater.on('error', (err) => {
+    const wasManual = _manualCheckPending;
     _manualCheckPending = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error('[auto-updater] error:', err?.message ?? err);
+
+    if (wasManual) {
+      const detail = isNetworkError(err as Error)
+        ? 'Could not reach the update server — check your internet connection and try again.'
+        : ((err as Error)?.message ?? 'An unexpected error occurred. Please try again later.');
+      dialog.showMessageBox(win, {
+        type: 'warning',
+        title: 'Update check failed',
+        message: 'Could not check for updates.',
+        detail,
+      });
+    }
+    // Automatic startup check: stay silent on all errors.
   });
 
   // Startup check — silent unless an update is actually found and downloaded.
