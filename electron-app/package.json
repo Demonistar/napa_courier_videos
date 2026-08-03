@@ -47,6 +47,7 @@
     "electron": "^31.7.7",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "@electron/notarize": "^2.5.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@tailwindcss/vite": "^4.0.0",
     "tailwindcss": "^4.0.0",

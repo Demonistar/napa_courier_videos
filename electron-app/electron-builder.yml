@@ -55,19 +55,37 @@ nsis:
   license: build/license.txt
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
-# Must be built on a Mac. Produces a .dmg for both Intel and Apple Silicon.
+# Builds run on a macos-latest GitHub Actions runner (see build-macos.yml).
+# Produces two .dmg files: one for Intel (x64) and one for Apple Silicon (arm64).
 mac:
   target:
     - target: dmg
       arch: [x64, arm64]   # x64 = Intel Macs, arm64 = M1/M2/M3 Macs
   icon: build/icon.icns
   category: public.app-category.productivity
-  # For distribution outside the Mac App Store, notarization is recommended
-  # so macOS Gatekeeper doesn't block the app. See README for instructions.
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # ── Notarization (optional — suppresses Gatekeeper warning on first launch) ──
+  #
+  # The afterSign hook (electron/notarize.cjs) submits the signed .app to
+  # Apple's servers so Gatekeeper trusts it on any Mac without any warnings.
+  # It is a no-op unless all three secrets below are set in the environment.
+  #
+  # Set these as GitHub repository secrets to enable notarization in CI:
+  #
+  #   APPLE_ID                    — Apple ID email (e.g. you@example.com)
+  #   APPLE_APP_SPECIFIC_PASSWORD — app-specific password from appleid.apple.com
+  #                                 → Account → Sign-In and Security →
+  #                                   App-Specific Passwords
+  #   APPLE_TEAM_ID               — 10-character Team ID from
+  #                                 developer.apple.com/account → Membership Details
+  #
+  # Without these secrets the build still succeeds and produces unsigned .dmg
+  # files. Admins can bypass the Gatekeeper warning once via right-click → Open.
+
+afterSign: electron/notarize.cjs
 
 dmg:
   sign: false                   # set to true once you have an Apple Developer certificate

@@ -1,8 +1,9 @@
 # NAPA Courier Admin — Desktop App
 
-A Windows desktop application for managing the NAPA courier delivery location directory.
+A desktop application for managing the NAPA courier delivery location directory.
 Built with **Electron + React + Vite + Tailwind CSS**.
 Data is stored in a **shared Dropbox folder** — all five admins read and write the same files.
+Available for **Windows** (x64) and **macOS** (Intel and Apple Silicon).
 
 ---
 
@@ -22,7 +23,12 @@ Data is stored in a **shared Dropbox folder** — all five admins read and write
 
 ## Automated CI Builds (GitHub Actions)
 
-The repository includes a GitHub Actions workflow (`.github/workflows/build-windows.yml`) that builds, signs, and publishes the Windows installer automatically — **no local Node.js required**.
+The repository includes GitHub Actions workflows that build and publish installers automatically — **no local Node.js, Xcode, or build tools required**.
+
+| Workflow | Runner | Output |
+|---|---|---|
+| `.github/workflows/build-windows.yml` | `windows-latest` | Signed `.exe` NSIS installer |
+| `.github/workflows/build-macos.yml` | `macos-latest` | Two `.dmg` files — Intel (x64) and Apple Silicon (arm64) |
 
 ### How a release build works
 
@@ -31,22 +37,27 @@ The repository includes a GitHub Actions workflow (`.github/workflows/build-wind
    git tag v1.2.0
    git push origin v1.2.0
    ```
-2. GitHub Actions picks up the tag, runs `npm run package:win` on a `windows-latest` runner, and uploads the signed `.exe` as a **GitHub Release asset**.
-3. Download the installer from the **Releases** page of the repository — no build tools needed.
+2. GitHub Actions picks up the tag, builds on the appropriate runner, and uploads the installers as **GitHub Release assets**.
+3. Download the installer from the **Releases** page of the repository — no build tools needed on your machine.
 
 ### Required repository secrets
 
 Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
 
-| Secret name | Value |
-|---|---|
-| `WIN_CSC_LINK` | Base64-encoded contents of your `.pfx` certificate file (see below) |
-| `WIN_CSC_KEY_PASSWORD` | Password you set when exporting the `.pfx` |
-| `DROPBOX_APP_KEY` | Your Dropbox app key (same one used in `.env`) |
+| Secret name | Platform | Required? | Value |
+|---|---|---|---|
+| `DROPBOX_APP_KEY` | Both | **Required** | Your Dropbox app key (same one used in `.env`) |
+| `WIN_CSC_LINK` | Windows | Optional | Base64-encoded `.pfx` certificate (see below) |
+| `WIN_CSC_KEY_PASSWORD` | Windows | Optional | Password for the `.pfx` |
+| `APPLE_ID` | macOS | Optional | Apple ID email (e.g. `you@example.com`) |
+| `APPLE_APP_SPECIFIC_PASSWORD` | macOS | Optional | App-specific password from [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security |
+| `APPLE_TEAM_ID` | macOS | Optional | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) → Membership |
 
-> If `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` are not set the build still succeeds, but the installer will be unsigned and Windows SmartScreen will warn on first run.
+> **Windows signing:** If `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` are not set the build still succeeds, but the installer will be unsigned and Windows SmartScreen will warn on first run.
+>
+> **macOS notarization:** If the three `APPLE_*` secrets are not set the build still succeeds and produces unsigned `.dmg` files. Gatekeeper will show "developer cannot be verified" on first launch — admins can bypass once with right-click → Open → Open. Set all three secrets to enable notarization, which eliminates the warning entirely.
 
-#### Encoding the .pfx for `WIN_CSC_LINK`
+#### Encoding the .pfx for `WIN_CSC_LINK` (Windows only)
 
 electron-builder accepts a base64-encoded certificate string in CI. To encode your `.pfx`:
 
@@ -66,25 +77,25 @@ base64 -w 0 napa-courier.pfx          # Linux — copy output manually
 
 ## Platform Support
 
-| Platform | Output | Build machine required |
+| Platform | Output | How to get the installer |
 |---|---|---|
-| Windows (x64) | NSIS `.exe` installer | Any Windows machine |
-| macOS (Intel, x64) | `.dmg` disk image | Must be built on a Mac |
-| macOS (Apple Silicon, arm64) | `.dmg` disk image | Must be built on a Mac (M1/M2/M3) |
+| Windows (x64) | NSIS `.exe` installer | Download from GitHub Releases (built by CI), or build locally on any Windows machine |
+| macOS (Intel, x64) | `.dmg` disk image | Download `NAPA Courier Admin-x.y.z.dmg` from GitHub Releases (built by CI) |
+| macOS (Apple Silicon, arm64) | `.dmg` disk image | Download `NAPA Courier Admin-x.y.z-arm64.dmg` from GitHub Releases (built by CI) |
 
-**Craig and other Mac admins:** build the macOS version on your Mac and distribute the `.dmg`.
-**Windows admins:** build on Windows and distribute the `.exe` installer.
-There is no cross-compilation — macOS builds cannot be produced on a Windows machine.
+**All admins:** download the correct installer from the **Releases** page — no Node.js, Xcode, or build tools needed.
+Push a `v`-prefixed git tag to trigger a CI build (see [Automated CI Builds](#automated-ci-builds-github-actions) above).
 
 ---
 
 ## Prerequisites
 
+> **Just need to install the app?** Download the installer from the GitHub Releases page — no build tools needed. The steps below are only for developers who need to build or run the app from source.
+
 - **Node.js 18 or later** — download from https://nodejs.org (use the LTS version)
 - **npm** — included with Node.js
 - A **Dropbox account** that has access to the shared folder
 - A Dropbox **App Key** (one-time setup, see below)
-- **macOS only:** Xcode Command Line Tools — run `xcode-select --install` in Terminal if you haven't already
 
 ---
 
