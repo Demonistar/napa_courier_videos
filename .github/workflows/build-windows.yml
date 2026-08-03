@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write   # needed to upload release assets
+  contents: write   # needed to create/update releases and upload assets
 
 jobs:
   build-windows:
@@ -37,13 +37,15 @@ jobs:
       # into electron-app/package.json so electron-builder picks it up for the
       # installer filename and About screen.  --no-git-tag-version prevents npm
       # from trying to create a new git tag inside the runner.
+      # --allow-same-version makes this a no-op when the version was already
+      # bumped locally by `npm run release:patch` before pushing the tag.
       - name: Set version from tag
         shell: bash
         working-directory: electron-app
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
-          npm version "$VERSION" --no-git-tag-version
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       # ── 5. Copy shared components from the web app source ────────────────────
       #
@@ -55,26 +57,29 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build & package ────────────────────────────────────────────────────
+      # ── 6. Build, package, and publish to GitHub Releases ────────────────────
       #
-      # WIN_CSC_LINK    — base64-encoded .pfx certificate stored as a repo secret.
-      #                   electron-builder detects the "base64," prefix and decodes
-      #                   it automatically.
-      # WIN_CSC_KEY_PASSWORD — password for the .pfx, stored as a repo secret.
+      # `--publish always` tells electron-builder to:
+      #   1. Build the NSIS installer (.exe)
+      #   2. Create (or update) the GitHub Release for this tag
+      #   3. Upload the installer AND the `latest.yml` update manifest
       #
-      # If neither secret is set the build still succeeds but the installer will
-      # not be signed (SmartScreen will warn on first run).
-      - name: Build and package Windows installer
+      # The update manifest is what allows installed copies of the app to detect
+      # new versions via electron-updater. Without it, auto-updates won't work.
+      #
+      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
+      #
+      # Code signing (prevents SmartScreen "unrecognized app" warning):
+      #   WIN_CSC_LINK          — base64-encoded .pfx certificate (repo secret)
+      #   WIN_CSC_KEY_PASSWORD  — password for the .pfx (repo secret)
+      #
+      # If neither signing secret is set the build still succeeds but the
+      # installer will be unsigned (SmartScreen will warn on first run).
+      - name: Build, package, and publish
         working-directory: electron-app
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: npm run package:win
-
-      # ── 6. Upload installer as a GitHub Release asset ─────────────────────────
-      - name: Upload installer to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: electron-app/dist-installer/*.exe
-          fail_on_unmatched_files: true
+        run: npm run publish:win

@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write   # needed to upload release assets
+  contents: write   # needed to create/update releases and upload assets
 
 jobs:
   build-macos:
@@ -35,6 +35,8 @@ jobs:
       # into electron-app/package.json so electron-builder picks it up for the
       # installer filename and About screen.  --no-git-tag-version prevents npm
       # from trying to create a new git tag inside the runner.
+      # --allow-same-version makes this a no-op when the version was already
+      # bumped locally by `npm run release:patch` before pushing the tag.
       #
       # The tag is passed through an env variable rather than inline shell
       # interpolation to prevent workflow-command injection from crafted tag names.
@@ -49,7 +51,7 @@ jobs:
             echo "Error: tag '$GIT_TAG' does not produce a valid SemVer version ('$VERSION')" >&2
             exit 1
           fi
-          npm version "$VERSION" --no-git-tag-version
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       # ── 5. Copy shared components from the web app source ────────────────────
       #
@@ -59,55 +61,42 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build & package ────────────────────────────────────────────────────
+      # ── 6. Build, package, and publish to GitHub Releases ────────────────────
+      #
+      # `--publish always` tells electron-builder to:
+      #   1. Build both DMG files (Intel x64 + Apple Silicon arm64)
+      #   2. Create (or update) the GitHub Release for this tag
+      #   3. Upload the DMGs AND the `latest-mac.yml` update manifest
+      #
+      # The update manifest is what allows installed copies of the app to detect
+      # new versions via electron-updater. Without it, auto-updates won't work
+      # on Mac.
+      #
+      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
       #
       # Code signing (prevents Gatekeeper "unverified developer" warning):
+      #   CSC_LINK          — base64-encoded Developer ID Application .p12 (repo secret)
+      #   CSC_KEY_PASSWORD  — password for the .p12 (repo secret)
       #
-      #   CSC_LINK          — base64-encoded Developer ID Application .p12
-      #                       certificate exported from Keychain Access. Obtain
-      #                       from a paid Apple Developer account at
-      #                       developer.apple.com → Certificates. Encode for CI:
-      #                         base64 -i DeveloperIDApplication.p12 | pbcopy
-      #                       electron-builder detects the base64 content and
-      #                       decodes it automatically.
-      #   CSC_KEY_PASSWORD  — password chosen when exporting the .p12, stored
-      #                       as a GitHub repository secret.
-      #
-      # If either signing secret is absent, electron-builder skips signing and
-      # the resulting .dmg will be unsigned. Gatekeeper will warn on first launch;
-      # admins can bypass once with right-click → Open → Open.
-      #
-      # Notarization (optional — submits signed app to Apple for approval):
-      # Requires the app to already be signed (CSC_LINK + CSC_KEY_PASSWORD).
+      # Notarization (optional — submits signed app to Apple for full approval):
       # The afterSign hook (electron/notarize.cjs) is a no-op unless all three
-      # APPLE_* secrets below are set.
+      # APPLE_* secrets below are set. Notarization requires signing secrets too.
       #
       #   APPLE_ID                    — Apple ID email (e.g. you@example.com)
       #   APPLE_APP_SPECIFIC_PASSWORD — app-specific password from
-      #                                 appleid.apple.com → Sign-In and Security →
-      #                                   App-Specific Passwords
+      #                                 appleid.apple.com → Sign-In and Security
       #   APPLE_TEAM_ID               — 10-character Team ID from
       #                                 developer.apple.com/account → Membership
       #
       # DROPBOX_APP_KEY is required for the app to connect to Dropbox at runtime.
-      - name: Build and package macOS installers
+      - name: Build, package, and publish
         working-directory: electron-app
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: npm run package:mac
-
-      # ── 7. Upload both .dmg files as GitHub Release assets ───────────────────
-      #
-      # Produces two assets on the Releases page:
-      #   NAPA Courier Admin-x.y.z.dmg          ← Intel Mac (x64)
-      #   NAPA Courier Admin-x.y.z-arm64.dmg    ← Apple Silicon (M1/M2/M3)
-      - name: Upload macOS installers to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: electron-app/dist-installer/*.dmg
-          fail_on_unmatched_files: true
+        run: npm run publish:mac

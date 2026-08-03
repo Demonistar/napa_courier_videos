@@ -33,16 +33,18 @@ export function SettingsPanel({
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
   const [localUser, setLocalUser] = useState(currentUser);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
-  // Load current settings when panel opens
+  // Load current settings and app version when panel opens
   useEffect(() => {
     if (!open) return;
     window.electronAPI.settings.get().then((s) => {
       setFolderPath(s.dropboxFolderPath ?? '');
       if (s.displayNameOverride) setLocalUser(s.displayNameOverride);
     });
+    window.electronAPI.app.getVersion().then(setAppVersion);
   }, [open]);
 
   const saveFolderPath = async () => {
@@ -161,10 +163,15 @@ export function SettingsPanel({
           )}
         </div>
 
-        {/* ── Easter egg ───────────────────────────────────────────── */}
-        <p className="text-center text-[10px] text-muted-foreground/30 pt-2 select-none tracking-wide">
-          Powered by Craig ✦
-        </p>
+        {/* ── Version + easter egg ─────────────────────────────────── */}
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-[10px] text-muted-foreground/50 select-none">
+            {appVersion ? `v${appVersion}` : ''}
+          </p>
+          <p className="text-[10px] text-muted-foreground/30 select-none tracking-wide">
+            Powered by Craig ✦
+          </p>
+        </div>
       </DialogContent>
     </Dialog>
   );

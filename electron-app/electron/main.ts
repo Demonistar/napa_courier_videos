@@ -601,6 +601,8 @@ function registerIpcHandlers() {
   ipcMain.handle('settings:set', (_event, updates: Partial<AppSettings>) => {
     saveSettings(updates);
   });
+
+  ipcMain.handle('app:getVersion', () => app.getVersion());
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
@@ -614,7 +616,7 @@ function registerIpcHandlers() {
  * This function wires them all up. On Windows/Linux the system handles this
  * natively, but the menu is harmless there too.
  */
-function buildAppMenu(): void {
+function buildAppMenu(win: BrowserWindow): void {
   const isMac = process.platform === 'darwin';
 
   const template: (Electron.MenuItemConstructorOptions | MenuItem)[] = [
@@ -692,6 +694,16 @@ function buildAppMenu(): void {
         ]),
       ],
     },
+    // Help menu — available on all platforms
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Check for Updates…',
+          click: () => checkForUpdatesManually(win),
+        },
+      ],
+    },
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -742,38 +754,91 @@ function createMainWindow(): BrowserWindow {
 
 // ─── Auto-updater ─────────────────────────────────────────────────────────────
 
+// Module-level state so both initAutoUpdater and checkForUpdatesManually share it.
+let _updateDownloaded = false;
+let _manualCheckPending = false;
+
+function showRestartDialog(win: BrowserWindow): void {
+  dialog
+    .showMessageBox(win, {
+      type: 'info',
+      title: 'Update ready',
+      message: 'A new version of NAPA Courier Admin has been downloaded.',
+      detail: 'Restart now to install the update, or it will be installed automatically the next time you quit.',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+}
+
+// Called from the Help → "Check for Updates…" menu item.
+function checkForUpdatesManually(win: BrowserWindow): void {
+  if (!app.isPackaged) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Dev build',
+      message: 'Update checks are only available in the packaged app.',
+    });
+    return;
+  }
+  // If an update is already sitting on disk, jump straight to the restart prompt.
+  if (_updateDownloaded) {
+    showRestartDialog(win);
+    return;
+  }
+  // Prevent double-clicks from firing two simultaneous checks.
+  if (_manualCheckPending) return;
+  _manualCheckPending = true;
+  autoUpdater.checkForUpdates().catch((err) => {
+    _manualCheckPending = false;
+    console.error('[auto-updater] manual check failed:', err?.message ?? err);
+    dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Update check failed',
+      message: 'Could not check for updates.',
+      detail: (err as Error)?.message ?? 'Network error. Please try again later.',
+    });
+  });
+}
+
 function initAutoUpdater(win: BrowserWindow): void {
   // Only run in the packaged app — dev builds have no update feed.
   if (!app.isPackaged) return;
 
-  // Download silently in the background; prompt only when ready to install.
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
-  autoUpdater.on('update-downloaded', () => {
-    dialog
-      .showMessageBox(win, {
+  // Fired after a manual check when already on the latest version.
+  autoUpdater.on('update-not-available', () => {
+    if (_manualCheckPending) {
+      _manualCheckPending = false;
+      dialog.showMessageBox(win, {
         type: 'info',
-        title: 'Update ready',
-        message: 'A new version of NAPA Courier Admin has been downloaded.',
-        detail: 'Restart now to install the update, or it will be installed automatically the next time you quit the app.',
-        buttons: ['Restart Now', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-      })
-      .then(({ response }) => {
-        if (response === 0) autoUpdater.quitAndInstall();
+        title: 'Up to date',
+        message: `You're running the latest version (${app.getVersion()}).`,
       });
+    }
+    // Startup automatic check: stay silent when no update is found.
   });
 
-  // Log errors silently — don't surface network/update-server issues to the user.
+  autoUpdater.on('update-downloaded', () => {
+    _updateDownloaded = true;
+    _manualCheckPending = false;
+    showRestartDialog(win);
+  });
+
+  // Log errors silently — don't surface network/update-server hiccups to the user.
   autoUpdater.on('error', (err) => {
+    _manualCheckPending = false;
     console.error('[auto-updater] error:', err?.message ?? err);
   });
 
-  // Fire-and-forget; errors are caught above.
+  // Startup check — silent unless an update is actually found and downloaded.
   autoUpdater.checkForUpdates().catch((err) => {
-    console.error('[auto-updater] checkForUpdates failed:', err?.message ?? err);
+    console.error('[auto-updater] startup check failed:', err?.message ?? err);
   });
 }
 
@@ -781,9 +846,9 @@ function initAutoUpdater(win: BrowserWindow): void {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
-  buildAppMenu();
   registerIpcHandlers();
   const win = createMainWindow();
+  buildAppMenu(win);       // needs win for the Help → Check for Updates handler
   initAutoUpdater(win);
 
   app.on('activate', () => {

@@ -69,6 +69,11 @@ const api = {
     set: (updates: Partial<AppSettings>): Promise<void> =>
       ipcRenderer.invoke('settings:set', updates),
   },
+
+  app: {
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke('app:getVersion'),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);
