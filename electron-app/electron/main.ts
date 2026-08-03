@@ -700,7 +700,10 @@ function buildAppMenu(win: BrowserWindow): void {
       submenu: [
         {
           label: 'Check for Updates…',
-          click: () => checkForUpdatesManually(win),
+          click: (menuItem) => {
+            _checkForUpdatesMenuItem = menuItem;
+            checkForUpdatesManually(win);
+          },
         },
       ],
     },
@@ -757,6 +760,7 @@ function createMainWindow(): BrowserWindow {
 // Module-level state so both initAutoUpdater and checkForUpdatesManually share it.
 let _updateDownloaded = false;
 let _manualCheckPending = false;
+let _checkForUpdatesMenuItem: Electron.MenuItem | null = null;
 
 function showRestartDialog(win: BrowserWindow): void {
   dialog
@@ -792,8 +796,10 @@ function checkForUpdatesManually(win: BrowserWindow): void {
   // Prevent double-clicks from firing two simultaneous checks.
   if (_manualCheckPending) return;
   _manualCheckPending = true;
+  if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = false;
   autoUpdater.checkForUpdates().catch((err) => {
     _manualCheckPending = false;
+    if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error('[auto-updater] manual check failed:', err?.message ?? err);
     dialog.showMessageBox(win, {
       type: 'warning',
@@ -815,6 +821,7 @@ function initAutoUpdater(win: BrowserWindow): void {
   autoUpdater.on('update-not-available', () => {
     if (_manualCheckPending) {
       _manualCheckPending = false;
+      if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
       dialog.showMessageBox(win, {
         type: 'info',
         title: 'Up to date',
@@ -827,12 +834,14 @@ function initAutoUpdater(win: BrowserWindow): void {
   autoUpdater.on('update-downloaded', () => {
     _updateDownloaded = true;
     _manualCheckPending = false;
+    if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     showRestartDialog(win);
   });
 
   // Log errors silently — don't surface network/update-server hiccups to the user.
   autoUpdater.on('error', (err) => {
     _manualCheckPending = false;
+    if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error('[auto-updater] error:', err?.message ?? err);
   });
 
