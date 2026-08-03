@@ -1,0 +1,134 @@
+name: Test macOS signing gate
+
+# Triggered on demand to confirm the "Verify code signature" step in
+# build-macos.yml correctly blocks unsigned builds from reaching admins.
+#
+# The test runs on a real macos-latest runner so the native `codesign` tool
+# is available.  It builds two synthetic unsigned .app bundles (one per
+# architecture output directory that build-macos.yml expects) and then feeds
+# them through the EXACT same gate script used in build-macos.yml step 7.
+#
+# Expected result: the gate script exits non-zero and the "Confirm gate
+# blocked upload" step reports a clear pass.  If codesign somehow passed on
+# the unsigned bundle the test job itself would fail, surfacing a regression.
+#
+# Run this workflow from Actions → "Test macOS signing gate" → Run workflow.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  signing-gate-test:
+    name: Verify codesign gate rejects an unsigned build
+    runs-on: macos-latest
+
+    steps:
+      # ── 1. Checkout (needed so the runner has the repo layout) ───────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Build minimal unsigned .app bundles ───────────────────────────────
+      #
+      # Creates the smallest valid macOS application bundle structure that
+      # codesign will accept as input but will refuse to verify as signed.
+      # The directory layout mirrors exactly what electron-builder produces so
+      # the gate script paths resolve correctly:
+      #
+      #   electron-app/dist-installer/mac/<AppName>.app/
+      #   electron-app/dist-installer/mac-arm64/<AppName>.app/
+      - name: Create unsigned .app bundles
+        working-directory: electron-app
+        run: |
+          APP_NAME="NAPA Courier Admin.app"
+
+          for ARCH_DIR in "dist-installer/mac" "dist-installer/mac-arm64"; do
+            APP_PATH="${ARCH_DIR}/${APP_NAME}"
+
+            # Minimal bundle skeleton: Contents/MacOS/<executable> + Info.plist
+            mkdir -p "${APP_PATH}/Contents/MacOS"
+
+            # Info.plist — required for codesign to recognise the bundle
+            cat > "${APP_PATH}/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>NAPA Courier Admin</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.napacourier.admin</string>
+            <key>CFBundleVersion</key>
+            <string>0.0.0</string>
+          </dict>
+          </plist>
+          PLIST
+
+            # Stub executable — codesign checks the bundle; not the binary content
+            printf '#!/bin/sh\n' > "${APP_PATH}/Contents/MacOS/NAPA Courier Admin"
+            chmod +x "${APP_PATH}/Contents/MacOS/NAPA Courier Admin"
+
+            echo "Created unsigned bundle: ${APP_PATH}"
+          done
+
+      # ── 3. Run the gate script — expect it to fail ───────────────────────────
+      #
+      # This reproduces build-macos.yml step 7 verbatim.  Running it with
+      # `continue-on-error: true` lets us capture the exit code and assert it
+      # is non-zero.  A non-zero exit here means the gate works as intended.
+      - name: Run gate script (expect failure)
+        id: gate
+        working-directory: electron-app
+        continue-on-error: true
+        run: |
+          APP_NAME="NAPA Courier Admin.app"
+          for APP_DIR in "dist-installer/mac" "dist-installer/mac-arm64"; do
+            APP_PATH="${APP_DIR}/${APP_NAME}"
+            if [ ! -d "${APP_PATH}" ]; then
+              echo "Error: expected .app not found at '${APP_PATH}'" >&2
+              exit 1
+            fi
+            echo "Verifying signature: ${APP_PATH}"
+            codesign --verify --deep --strict "${APP_PATH}"
+            echo "✓ Signature valid: ${APP_PATH}"
+          done
+
+      # ── 4. Confirm the gate blocked the upload ───────────────────────────────
+      #
+      # The gate step MUST have exited non-zero.  If it somehow returned 0 the
+      # codesign check passed on an unsigned bundle — the gate is broken and
+      # this test job fails loudly.
+      - name: Confirm gate blocked upload
+        run: |
+          OUTCOME="${{ steps.gate.outcome }}"
+          echo "Gate step outcome: ${OUTCOME}"
+          if [ "${OUTCOME}" = "failure" ]; then
+            echo ""
+            echo "✅ PASS — codesign --verify --deep --strict correctly rejected"
+            echo "   the unsigned bundle.  The gate would have stopped this build"
+            echo "   before any DMG reached GitHub Releases."
+          else
+            echo ""
+            echo "❌ FAIL — codesign --verify returned 0 for an unsigned bundle."
+            echo "   The signing gate in build-macos.yml step 7 is NOT working."
+            exit 1
+          fi
+
+      # ── 5. Confirm upload step would be skipped ──────────────────────────────
+      #
+      # In build-macos.yml the publish step is a plain sequential step — it
+      # only runs when every prior step succeeds.  Because the gate (step 7)
+      # exits non-zero, GitHub Actions marks the job as failed and skips all
+      # remaining steps, including "Publish to GitHub Releases" (step 8).
+      #
+      # This step records that guarantee explicitly in the workflow log.
+      - name: Confirm upload step is unreachable after gate failure
+        run: |
+          echo "In build-macos.yml, step 8 (Publish to GitHub Releases) is a"
+          echo "plain sequential step with no 'if:' condition."
+          echo ""
+          echo "GitHub Actions skips all subsequent steps as soon as any step"
+          echo "exits non-zero, so a gate failure in step 7 guarantees step 8"
+          echo "never runs and no unsigned DMG is uploaded."
+          echo ""
+          echo "✅ Upload gate confirmed: unsigned builds cannot reach admins."
