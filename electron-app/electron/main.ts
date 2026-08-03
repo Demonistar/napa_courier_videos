@@ -704,7 +704,7 @@ function createMainWindow(): BrowserWindow {
     title: 'NAPA Courier Admin',
     backgroundColor: '#ffffff',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       // sandbox: false is required because contextBridge + ipcRenderer in preload
