@@ -1,50 +1,13 @@
-Two icon files are needed here — one per platform:
+Icons are already generated and present in this directory:
 
-════════════════════════════════════════
-  Windows:  build/icon.ico
-════════════════════════════════════════
-Format: Windows ICO with multiple sizes embedded
-Recommended sizes: 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 px
-Color depth: 32-bit RGBA
+  build/icon.ico   — Windows icon (16, 32, 48, 64, 128, 256 px)
+  build/icon.icns  — macOS icon  (16, 32, 64, 128, 256, 512, 1024 px)
 
-How to create it:
-  Option A: https://redketchup.io/icon-editor — upload a PNG, export as .ico
-  Option B: GIMP → File → Export As → Windows Icon (.ico)
-  Option C: https://www.icoconverter.com/
+Both were generated from the NAPA hexagon badge design:
+  Yellow hexagon outline (#FFB300), white interior, navy "NAPA" text (#002366).
 
-════════════════════════════════════════
-  macOS:    build/icon.icns
-════════════════════════════════════════
-Format: Apple Icon Image (.icns) with multiple sizes embedded
-Required sizes: 16, 32, 64, 128, 256, 512, 1024 px (macOS uses all of them)
-
-How to create it (on a Mac):
-  Option A: iconutil — the official Apple tool
-    1. Create a folder named MyIcon.iconset/
-    2. Place PNG files inside:
-         icon_16x16.png, icon_16x16@2x.png
-         icon_32x32.png, icon_32x32@2x.png
-         icon_128x128.png, icon_128x128@2x.png
-         icon_256x256.png, icon_256x256@2x.png
-         icon_512x512.png, icon_512x512@2x.png
-    3. Run: iconutil -c icns MyIcon.iconset
-  Option B: https://cloudconvert.com/png-to-icns — upload a 1024×1024 PNG
-
-════════════════════════════════════════
-  Start from a single master image
-════════════════════════════════════════
-The easiest approach is to design one 1024×1024 PNG master and generate
-both formats from it.
-
-Recommended tool:  https://www.npmjs.com/package/electron-icon-builder
-  npm install -g electron-icon-builder
-  electron-icon-builder --input=icon-master-1024.png --output=build/
-
-This generates icon.ico and icon.icns from the master automatically.
-
-════════════════════════════════════════
-  Building without icons (quick test)
-════════════════════════════════════════
-You can package the app without icons by removing the `icon:` lines from
-electron-builder.yml. The app and installer will show the generic Electron
-icon, but everything will still work.
+To regenerate (e.g. after a brand refresh):
+  - Edit /tmp/napa-icon.svg (or recreate a new master SVG)
+  - Re-run the generation pipeline documented in electron-app/README.md
+  - Or use electron-icon-builder with a new 1024x1024 PNG master:
+      npx electron-icon-builder --input=my-icon.png --output=build/

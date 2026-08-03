@@ -160,6 +160,11 @@ export function SettingsPanel({
             </section>
           )}
         </div>
+
+        {/* ── Easter egg ───────────────────────────────────────────── */}
+        <p className="text-center text-[10px] text-muted-foreground/30 pt-2 select-none tracking-wide">
+          Powered by Craig ✦
+        </p>
       </DialogContent>
     </Dialog>
   );
