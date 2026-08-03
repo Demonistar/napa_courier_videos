@@ -47,15 +47,15 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 | Secret name | Platform | Required? | Value |
 |---|---|---|---|
 | `DROPBOX_APP_KEY` | Both | **Required** | Your Dropbox app key (same one used in `.env`) |
-| `WIN_CSC_LINK` | Windows | Optional | Base64-encoded `.pfx` certificate (see below) |
-| `WIN_CSC_KEY_PASSWORD` | Windows | Optional | Password for the `.pfx` |
-| `CSC_LINK` | macOS | Optional | Base64-encoded Developer ID Application `.p12` certificate (see below) |
-| `CSC_KEY_PASSWORD` | macOS | Optional | Password for the `.p12` |
+| `WIN_CSC_LINK` | Windows | **Required for signing** | Base64-encoded `.pfx` certificate (see below) |
+| `WIN_CSC_KEY_PASSWORD` | Windows | **Required for signing** | Password for the `.pfx` |
+| `CSC_LINK` | macOS | **Required for signing** | Base64-encoded Developer ID Application `.p12` certificate (see below) |
+| `CSC_KEY_PASSWORD` | macOS | **Required for signing** | Password for the `.p12` |
 | `APPLE_ID` | macOS | Optional | Apple ID email (e.g. `you@example.com`) |
 | `APPLE_APP_SPECIFIC_PASSWORD` | macOS | Optional | App-specific password from [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security |
 | `APPLE_TEAM_ID` | macOS | Optional | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) → Membership |
 
-> **Windows signing:** If `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` are not set the build still succeeds, but the installer will be unsigned and Windows SmartScreen will warn on first run.
+> **Windows signing:** `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` are required to produce a signed installer. Without them the build still succeeds, but the installer will be unsigned and Windows SmartScreen will show **"Windows protected your PC — unrecognized app"** on every install. Set both secrets to eliminate that warning.
 >
 > **macOS signing:** If `CSC_LINK` / `CSC_KEY_PASSWORD` are not set the build still succeeds, but the `.dmg` will be unsigned and Gatekeeper will show "developer cannot be verified" on first launch. Admins can bypass once with right-click → Open → Open.
 >
