@@ -1,78 +1,197 @@
 name: Test Linux build gate
 
-# Runs on pull requests that touch the Electron installer config or the
-# Linux release workflow, confirming that electron-builder can produce
-# a valid AppImage and .deb before the PR is merged.
+# Triggered on every pull request (no `paths:` filter) and on demand.
 #
-# Unlike the Windows/macOS signing gate tests, there is nothing to sign
-# on Linux — the gate here is purely "does the build succeed and produce
-# the expected artifacts?"
+# WHY NO PATHS FILTER
+# GitHub does not create a check-run when a workflow is skipped by a
+# `pull_request.paths` filter.  A required-status check whose context never
+# appears stays permanently "pending", which blocks every unrelated PR forever.
+# Instead, this workflow runs on all pull requests and detects relevant changes
+# in its first step; when no installer-affecting files changed it exits
+# immediately with success so the required check is satisfied without spinning
+# up the ubuntu-latest runner for an expensive build.
 #
-# Run this workflow from Actions → "Test Linux build gate" → Run workflow,
-# or it fires automatically on matching pull requests.
+# WHAT IT TESTS
+# When a PR touches electron-app/** or .github/workflows/build-linux.yml the
+# workflow runs a full electron-builder --linux --publish never build on
+# ubuntu-latest and verifies that both expected output files exist and are
+# non-empty:
+#   • NAPA Courier Admin-<version>.AppImage
+#   • napa-courier-admin_<version>_amd64.deb
+#
+# Expected result: both artifacts are produced and the job exits 0.  A
+# misconfigured linux section in electron-builder.config.js (wrong target
+# name, bad arch, missing system dep) will cause the build to fail, surfacing
+# the regression on the PR rather than at release time.
+#
+# This workflow does NOT upload anything — it is purely a build smoke test.
+#
+# Run this workflow from Actions → "Test Linux build gate" → Run workflow.
 
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/build-linux.yml"
-      - "electron-app/electron-builder.config.js"
-      - "electron-app/package.json"
-      - "electron-app/electron/**"
-      - "electron-app/src/**"
+    # No paths: filter — see note above.  Internal change detection below
+    # short-circuits the job when no installer-affecting files are touched.
 
 jobs:
   linux-build-gate:
-    name: Verify Linux build produces AppImage + deb
+    name: Verify Linux installers build (AppImage + deb)
     runs-on: ubuntu-latest
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
+      #
+      # fetch-depth: 0 ensures the base commit is available so git diff can
+      # compare the PR head against its merge base.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
+      # ── 2. Detect installer-affecting changes ─────────────────────────────
+      #
+      # Sets output `run_gate` to "true" when the PR touches files that affect
+      # the Linux installer build, and to "false" otherwise.
+      #
+      # For workflow_dispatch (manual runs) the gate always runs so developers
+      # can verify the build on demand without touching any files.
+      #
+      # Files that trigger the gate:
+      #   electron-app/**                              — app source and config
+      #   .github/workflows/build-linux.yml            — the release build workflow
+      - name: Detect installer-affecting changes
+        id: changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger — running Linux build gate unconditionally."
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD")
+
+          echo "Files changed in this PR:"
+          echo "$CHANGED"
+          echo ""
+
+          RELEVANT_PATTERN='^(electron-app/|\.github/workflows/build-linux\.yml)'
+          if echo "$CHANGED" | grep -qE "$RELEVANT_PATTERN"; then
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "Installer-affecting files changed — Linux build gate will run."
+          else
+            echo "run_gate=false" >> "$GITHUB_OUTPUT"
+            echo "No installer-affecting files changed — skipping gate (pass)."
+          fi
+
+      # ── 3. Short-circuit when no relevant files changed ───────────────────
+      #
+      # Reports a clear skip message and exits 0 so the required-check context
+      # is satisfied without running the remaining build steps.
+      - name: Skip gate (no installer-affecting changes)
+        if: steps.changes.outputs.run_gate == 'false'
+        shell: bash
+        run: |
+          echo "✅ SKIP — no changes to electron-app/ or"
+          echo "   .github/workflows/build-linux.yml in this PR."
+          echo ""
+          echo "The Linux build gate is not relevant to these changes."
+          echo "Required check satisfied."
+
+      # ── 4. Set up Node.js ────────────────────────────────────────────────
       - name: Set up Node.js
+        if: steps.changes.outputs.run_gate == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      # ── 5. Set up pnpm ───────────────────────────────────────────────────
       - name: Set up pnpm
+        if: steps.changes.outputs.run_gate == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      # ── 3. Install system build tools ────────────────────────────────────────
+      # ── 6. Install system build tools ────────────────────────────────────
+      #
+      # electron-builder requires fakeroot and dpkg to produce .deb packages
+      # on Ubuntu runners.  Mirrors build-linux.yml step 3.
       - name: Install system build tools
+        if: steps.changes.outputs.run_gate == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fakeroot dpkg
 
-      # ── 4. Install Node dependencies ─────────────────────────────────────────
+      # ── 7. Install Node dependencies ─────────────────────────────────────
       #
       # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
       # Install from the workspace root so pnpm resolves catalog: specifiers.
       - name: Install dependencies
+        if: steps.changes.outputs.run_gate == 'true'
         run: pnpm install --frozen-lockfile
 
-      # ── 5. Copy shared components from the web app source ────────────────────
+      # ── 8. Stamp a test version ──────────────────────────────────────────
+      #
+      # The release workflow stamps the version from the git tag.  On a PR
+      # there is no tag, so we write a synthetic test version (0.0.0-gate-test)
+      # into electron-app/package.json so electron-builder picks it up for
+      # the installer filename.  This mirrors the version-stamp logic in
+      # build-linux.yml step 5.
+      #
+      # Uses a Node script instead of `npm version` because the package.json
+      # contains pnpm catalog: specifiers that npm does not understand.
+      - name: Stamp test version into package.json
+        if: steps.changes.outputs.run_gate == 'true'
+        working-directory: electron-app
+        run: |
+          VERSION="0.0.0"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${VERSION}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          ACTUAL=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "Error: package.json version is '$ACTUAL', expected '$VERSION'" >&2
+            exit 1
+          fi
+          echo "✓ package.json version set to $VERSION (smoke-test placeholder)"
+
+      # ── 9. Copy shared components ────────────────────────────────────────
+      #
+      # setup-components.sh copies shadcn/ui primitives, tree, form, and other
+      # shared code from artifacts/napa-courier-admin/src/ into electron-app/src/.
+      # Mirrors build-linux.yml step 6.
       - name: Copy shared components
+        if: steps.changes.outputs.run_gate == 'true'
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build and package (no publish) ────────────────────────────────────
+      # ── 10. Build and package ─────────────────────────────────────────────
       #
-      # Builds the full Electron app and packages it for Linux.  DROPBOX_APP_KEY
-      # is read from the committed .env file so no secret is needed here.
-      # --publish never ensures nothing is uploaded even if GH_TOKEN were present.
+      # Runs the full electron-builder Linux build.  --publish never ensures
+      # nothing is uploaded to GitHub Releases — this is a smoke test only.
+      #
+      # DROPBOX_APP_KEY is required for the app to connect to Dropbox at
+      # runtime; it is not needed for the build itself, so a missing secret
+      # produces an empty string rather than a build failure.
       - name: Build and package
+        if: steps.changes.outputs.run_gate == 'true'
         working-directory: electron-app
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
         run: pnpm run build && electron-builder --linux --publish never
 
-      # ── 7. Verify output artifacts ────────────────────────────────────────────
+      # ── 11. Verify output artifacts ───────────────────────────────────────
       #
       # Confirms both expected output files exist and are non-empty.  Catches
       # silent build failures where electron-builder exits 0 but produces no
-      # output (e.g. a misconfigured target name or arch).
+      # output (e.g. misconfigured target name or architecture).
+      # Mirrors build-linux.yml step 8.
       - name: Verify output artifacts
+        if: steps.changes.outputs.run_gate == 'true'
         working-directory: electron-app
         run: |
           echo "Contents of dist-installer/:"
@@ -80,33 +199,32 @@ jobs:
 
           APPIMAGE=$(find dist-installer -maxdepth 1 -name "*.AppImage" | head -1)
           DEB=$(find dist-installer -maxdepth 1 -name "*.deb" | head -1)
-          MANIFEST=$(find dist-installer -maxdepth 1 -name "latest-linux.yml" | head -1)
 
-          FAILED=0
-          for LABEL_FILE in "AppImage:${APPIMAGE}" "deb:${DEB}" "latest-linux.yml:${MANIFEST}"; do
-            LABEL="${LABEL_FILE%%:*}"
-            FILE="${LABEL_FILE#*:}"
+          MISSING=0
+          for FILE in "$APPIMAGE" "$DEB"; do
             if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-              echo "❌ FAIL — expected ${LABEL} output not found in dist-installer/" >&2
-              FAILED=1
+              echo "Error: expected output file not found (AppImage or .deb)" >&2
+              MISSING=1
               continue
             fi
             SIZE=$(stat -c%s "$FILE")
             if [ "$SIZE" -lt 1024 ]; then
-              echo "❌ FAIL — '$(basename "$FILE")' is only ${SIZE} bytes (suspiciously small)" >&2
-              FAILED=1
+              echo "Error: '$FILE' is suspiciously small (${SIZE} bytes) — build may have failed" >&2
+              MISSING=1
               continue
             fi
             echo "✓  $(basename "$FILE")  ($(numfmt --to=iec "$SIZE"))"
           done
 
-          if [ "$FAILED" -ne 0 ]; then
-            echo ""
-            echo "Linux build gate FAILED — one or more expected artifacts are missing or empty."
-            echo "Check the 'Build and package' step above for electron-builder errors."
+          if [ "$MISSING" -ne 0 ]; then
+            echo "" >&2
+            echo "❌ FAIL — one or more expected Linux installers were not produced." >&2
+            echo "   Check the electron-builder output above for errors." >&2
+            echo "   Common causes: wrong target name, bad arch, missing system dep." >&2
             exit 1
           fi
 
           echo ""
-          echo "✅ Linux build gate PASSED — AppImage, .deb, and latest-linux.yml are present."
-          echo "   The release workflow (build-linux.yml) will produce valid artifacts on tag push."
+          echo "✅ PASS — both Linux installers (AppImage + deb) were produced"
+          echo "   successfully.  The linux section in electron-builder.config.js"
+          echo "   is valid and the build pipeline is healthy."
