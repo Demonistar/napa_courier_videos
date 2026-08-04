@@ -221,6 +221,12 @@ export function initAutoUpdater(win: BrowserWindow): void {
     // Startup automatic check: stay silent when no update is found.
   });
 
+  // Relay download progress to the renderer so the Settings panel can show a
+  // progress bar while the update is downloading.
+  autoUpdater.on('download-progress', (info: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => {
+    win.webContents.send('app:downloadProgress', info);
+  });
+
   autoUpdater.on('update-downloaded', () => {
     _updateDownloaded = true;
     _manualCheckPending = false;

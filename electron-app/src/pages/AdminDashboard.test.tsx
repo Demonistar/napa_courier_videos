@@ -83,6 +83,7 @@ function makeElectronAPI(updateDownloaded: boolean) {
         storedCancelledListener = cb;
         return () => { storedCancelledListener = null; };
       }),
+      onDownloadProgress: vi.fn().mockReturnValue(() => {}),
     },
     auth: {
       getStatus: vi.fn().mockResolvedValue({ authenticated: false }),

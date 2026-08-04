@@ -88,6 +88,12 @@ const api = {
       ipcRenderer.on('app:updateCancelled', handler);
       return () => ipcRenderer.removeListener('app:updateCancelled', handler);
     },
+    /** Fired repeatedly while an update is downloading. Percent is 0–100. */
+    onDownloadProgress: (callback: (info: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, info: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => callback(info);
+      ipcRenderer.on('app:downloadProgress', handler);
+      return () => ipcRenderer.removeListener('app:downloadProgress', handler);
+    },
     quitAndInstall: (): Promise<void> =>
       ipcRenderer.invoke('app:quitAndInstall'),
     /** Returns the OS platform string and the .app path on macOS. */

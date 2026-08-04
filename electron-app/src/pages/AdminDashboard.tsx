@@ -84,6 +84,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
@@ -93,9 +94,10 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     window.electronAPI.app.getUpdateStatus().then(({ updateDownloaded }) => {
       if (updateDownloaded) setUpdateReady(true);
     });
-    const cleanupReady     = window.electronAPI.app.onUpdateReady(()      => setUpdateReady(true));
-    const cleanupCancelled = window.electronAPI.app.onUpdateCancelled(() => setUpdateReady(false));
-    return () => { cleanupReady(); cleanupCancelled(); };
+    const cleanupReady     = window.electronAPI.app.onUpdateReady(()      => { setUpdateReady(true); setDownloadProgress(null); });
+    const cleanupCancelled = window.electronAPI.app.onUpdateCancelled(() => { setUpdateReady(false); setDownloadProgress(null); });
+    const cleanupProgress  = window.electronAPI.app.onDownloadProgress((info) => setDownloadProgress(info));
+    return () => { cleanupReady(); cleanupCancelled(); cleanupProgress(); };
   }, []);
 
   const {
@@ -457,6 +459,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         currentUser={state.currentUser}
         onCurrentUserChange={setCurrentUser}
         updateReady={updateReady}
+        downloadProgress={downloadProgress}
       />
 
       {/* Backup & Restore */}

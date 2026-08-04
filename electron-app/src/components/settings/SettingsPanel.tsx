@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Cloud,
   CloudOff,
+  Download,
   FolderOpen,
   Loader2,
   LogOut,
@@ -16,6 +17,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -36,6 +38,13 @@ import {
 import { DropboxFolderBrowser, type DetectedFolder } from './DropboxFolderBrowser';
 import { DropboxUserInfo } from '@/hooks/use-dropbox-user';
 
+interface DownloadProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
 interface SettingsPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,6 +54,7 @@ interface SettingsPanelProps {
   currentUser: string;
   onCurrentUserChange: (name: string) => void;
   updateReady?: boolean;
+  downloadProgress?: DownloadProgress | null;
 }
 
 type Theme = 'light' | 'dark' | 'system';
@@ -74,6 +84,7 @@ export function SettingsPanel({
   currentUser,
   onCurrentUserChange,
   updateReady = false,
+  downloadProgress = null,
 }: SettingsPanelProps) {
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
@@ -434,6 +445,25 @@ export function SettingsPanel({
               </section>
             )}
           </div>
+
+          {/* ── Download progress ──────────────────────────────────── */}
+          {downloadProgress !== null && !updateReady && (
+            <div className="space-y-2 p-3 border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-900 rounded-md">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs text-blue-800 dark:text-blue-300 font-medium">
+                  <Download className="w-3.5 h-3.5 shrink-0" />
+                  Downloading update…
+                </div>
+                <span className="text-xs text-blue-700 dark:text-blue-400 tabular-nums">
+                  {Math.round(downloadProgress?.percent ?? 0)}%
+                </span>
+              </div>
+              <Progress
+                value={downloadProgress?.percent ?? 0}
+                className="h-1.5 bg-blue-200 dark:bg-blue-800"
+              />
+            </div>
+          )}
 
           {/* ── Update-ready notice ────────────────────────────────── */}
           {updateReady && (
