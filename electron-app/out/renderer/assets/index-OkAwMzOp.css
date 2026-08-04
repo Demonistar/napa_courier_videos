@@ -94,9 +94,16 @@
     --color-green-800: oklch(44.8% .119 151.328);
     --color-green-900: oklch(39.3% .095 152.535);
     --color-green-950: oklch(26.6% .065 152.934);
+    --color-blue-50: oklch(97% .014 254.604);
+    --color-blue-200: oklch(88.2% .059 254.128);
+    --color-blue-300: oklch(80.9% .105 251.813);
     --color-blue-400: oklch(70.7% .165 254.624);
     --color-blue-500: oklch(62.3% .214 259.815);
     --color-blue-600: oklch(54.6% .245 262.881);
+    --color-blue-700: oklch(48.8% .243 264.376);
+    --color-blue-800: oklch(42.4% .199 265.638);
+    --color-blue-900: oklch(37.9% .146 265.522);
+    --color-blue-950: oklch(28.2% .091 267.935);
     --color-black: #000;
     --color-white: #fff;
     --spacing: .25rem;
@@ -462,10 +469,6 @@
 
   .top-0 {
     top: 0;
-  }
-
-  .top-1 {
-    top: var(--spacing);
   }
 
   .top-1\.5 {
@@ -1643,6 +1646,10 @@
     border-color: var(--color-amber-400);
   }
 
+  .border-blue-200 {
+    border-color: var(--color-blue-200);
+  }
+
   .border-border, .border-border\/50 {
     border-color: hsl(var(--border));
   }
@@ -1851,6 +1858,14 @@
     }
   }
 
+  .bg-blue-50 {
+    background-color: var(--color-blue-50);
+  }
+
+  .bg-blue-200 {
+    background-color: var(--color-blue-200);
+  }
+
   .bg-border {
     background-color: hsl(var(--border));
   }
@@ -1859,7 +1874,17 @@
     background-color: hsl(var(--card));
   }
 
-  .bg-destructive, .bg-destructive\/10 {
+  .bg-destructive, .bg-destructive\/5 {
+    background-color: hsl(var(--destructive));
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .bg-destructive\/5 {
+      background-color: color-mix(in oklab, hsl(var(--destructive)) 5%, transparent);
+    }
+  }
+
+  .bg-destructive\/10 {
     background-color: hsl(var(--destructive));
   }
 
@@ -1879,10 +1904,6 @@
 
   .bg-green-100 {
     background-color: var(--color-green-100);
-  }
-
-  .bg-green-500 {
-    background-color: var(--color-green-500);
   }
 
   .bg-green-600 {
@@ -1995,6 +2016,10 @@
 
   .p-2 {
     padding: calc(var(--spacing) * 2);
+  }
+
+  .p-2\.5 {
+    padding: calc(var(--spacing) * 2.5);
   }
 
   .p-3 {
@@ -2331,6 +2356,10 @@
     white-space: nowrap;
   }
 
+  .whitespace-pre-line {
+    white-space: pre-line;
+  }
+
   .whitespace-pre-wrap {
     white-space: pre-wrap;
   }
@@ -2371,6 +2400,14 @@
     color: var(--color-blue-600);
   }
 
+  .text-blue-700 {
+    color: var(--color-blue-700);
+  }
+
+  .text-blue-800 {
+    color: var(--color-blue-800);
+  }
+
   .text-card-foreground {
     color: hsl(var(--card-foreground));
   }
@@ -2385,6 +2422,16 @@
 
   .text-destructive-foreground {
     color: hsl(var(--destructive-foreground));
+  }
+
+  .text-destructive\/80 {
+    color: hsl(var(--destructive));
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-destructive\/80 {
+      color: color-mix(in oklab, hsl(var(--destructive)) 80%, transparent);
+    }
   }
 
   .text-foreground, .text-foreground\/50 {
@@ -2568,15 +2615,6 @@
     box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
   }
 
-  .ring-2 {
-    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
-    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
-  }
-
-  .ring-background {
-    --tw-ring-color: hsl(var(--background));
-  }
-
   .ring-ring {
     --tw-ring-color: hsl(var(--ring));
   }
@@ -2718,6 +2756,11 @@
     outline-style: none;
   }
 
+  .select-all {
+    -webkit-user-select: all;
+    user-select: all;
+  }
+
   .select-none {
     -webkit-user-select: none;
     user-select: none;
@@ -2729,6 +2772,10 @@
 
   .\[--cell-size\:2rem\] {
     --cell-size: 2rem;
+  }
+
+  .running {
+    animation-play-state: running;
   }
 
   .group-focus-within\/menu-item\:opacity-100:is(:where(.group\/menu-item):focus-within *) {
@@ -3075,6 +3122,16 @@
   }
 
   @media (hover: hover) {
+    .hover\:border-destructive\/50:hover {
+      border-color: hsl(var(--destructive));
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:border-destructive\/50:hover {
+        border-color: color-mix(in oklab, hsl(var(--destructive)) 50%, transparent);
+      }
+    }
+
     .hover\:border-muted-foreground\/30:hover {
       border-color: hsl(var(--muted-foreground));
     }
@@ -3118,6 +3175,16 @@
     @supports (color: color-mix(in lab, red, red)) {
       .hover\:bg-destructive\/10:hover {
         background-color: color-mix(in oklab, hsl(var(--destructive)) 10%, transparent);
+      }
+    }
+
+    .hover\:bg-destructive\/90:hover {
+      background-color: hsl(var(--destructive));
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-destructive\/90:hover {
+        background-color: color-mix(in oklab, hsl(var(--destructive)) 90%, transparent);
       }
     }
 
@@ -4134,6 +4201,10 @@
     border-color: var(--color-amber-900);
   }
 
+  .dark\:border-blue-900:is(.dark *) {
+    border-color: var(--color-blue-900);
+  }
+
   .dark\:border-destructive:is(.dark *) {
     border-color: hsl(var(--destructive));
   }
@@ -4153,6 +4224,20 @@
   @supports (color: color-mix(in lab, red, red)) {
     .dark\:bg-amber-950\/30:is(.dark *) {
       background-color: color-mix(in oklab, var(--color-amber-950) 30%, transparent);
+    }
+  }
+
+  .dark\:bg-blue-800:is(.dark *) {
+    background-color: var(--color-blue-800);
+  }
+
+  .dark\:bg-blue-950\/30:is(.dark *) {
+    background-color: #1624564d;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .dark\:bg-blue-950\/30:is(.dark *) {
+      background-color: color-mix(in oklab, var(--color-blue-950) 30%, transparent);
     }
   }
 
@@ -4186,6 +4271,14 @@
 
   .dark\:text-amber-400:is(.dark *) {
     color: var(--color-amber-400);
+  }
+
+  .dark\:text-blue-300:is(.dark *) {
+    color: var(--color-blue-300);
+  }
+
+  .dark\:text-blue-400:is(.dark *) {
+    color: var(--color-blue-400);
   }
 
   .dark\:text-green-300:is(.dark *) {

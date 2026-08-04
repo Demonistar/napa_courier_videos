@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronRight, ChevronDown, MapPin, Plus } from 'lucide-react';
 import { Location } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -11,9 +11,6 @@ interface LocationTreeProps {
   onSelectLocation: (id: string) => void;
   searchQuery: string;
   onAddLocation: () => void;
-  /** When set, the matching location gets data-tour-id="new-location" and the
-   *  tree auto-expands to reveal it. Used by the guided tour's final step. */
-  tourHighlightId?: string | null;
 }
 
 interface TreeNode {
@@ -30,20 +27,9 @@ export function LocationTree({
   onSelectLocation,
   searchQuery,
   onAddLocation,
-  tourHighlightId,
 }: LocationTreeProps) {
   const [expandedStates, setExpandedStates] = useState<Set<string>>(new Set());
   const [expandedCities, setExpandedCities] = useState<Set<string>>(new Set());
-
-  // When the tour highlights a newly-created location, auto-expand its
-  // state and city so the entry is visible without manual navigation.
-  useEffect(() => {
-    if (!tourHighlightId) return;
-    const loc = locations.find((l) => l.id === tourHighlightId);
-    if (!loc) return;
-    setExpandedStates((prev) => new Set([...prev, loc.state]));
-    setExpandedCities((prev) => new Set([...prev, `${loc.state}-${loc.city}`]));
-  }, [tourHighlightId, locations]);
 
   const tree = useMemo(() => {
     const stateMap = new Map<string, Map<string, Location[]>>();
@@ -199,9 +185,6 @@ export function LocationTree({
                                       : 'hover:bg-accent'
                                   )}
                                   data-testid={`tree-location-${loc.id}`}
-                                  {...(tourHighlightId === loc.id
-                                    ? { 'data-tour-id': 'new-location' }
-                                    : {})}
                                 >
                                   <MapPin className="w-4 h-4 shrink-0" />
                                   <span className="truncate">{highlightText(loc.siteName)}</span>

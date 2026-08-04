@@ -27,13 +27,40 @@ const api = {
       electron.ipcRenderer.on("app:updateReady", handler);
       return () => electron.ipcRenderer.removeListener("app:updateReady", handler);
     },
-    quitAndInstall: () => electron.ipcRenderer.invoke("app:quitAndInstall")
+    /** Fired when a download that had already set the badge fails mid-session. */
+    onUpdateCancelled: (callback) => {
+      const handler = () => callback();
+      electron.ipcRenderer.on("app:updateCancelled", handler);
+      return () => electron.ipcRenderer.removeListener("app:updateCancelled", handler);
+    },
+    /** Fired repeatedly while an update is downloading. Percent is 0–100. */
+    onDownloadProgress: (callback) => {
+      const handler = (_event, info) => callback(info);
+      electron.ipcRenderer.on("app:downloadProgress", handler);
+      return () => electron.ipcRenderer.removeListener("app:downloadProgress", handler);
+    },
+    quitAndInstall: () => electron.ipcRenderer.invoke("app:quitAndInstall"),
+    /** Returns the OS platform string and the .app path on macOS. */
+    getPlatform: () => electron.ipcRenderer.invoke("app:getPlatform"),
+    /**
+     * Windows: launches the NSIS uninstaller and quits.
+     * macOS:   returns the .app bundle path for manual drag-to-Trash instructions.
+     * Dropbox data is NEVER touched by either path.
+     */
+    uninstall: () => electron.ipcRenderer.invoke("app:uninstall")
   },
   dropbox: {
     /** List immediate subfolders at a Dropbox path. Pass '' for the root. */
     listFolder: (path) => electron.ipcRenderer.invoke("dropbox:listFolder", path),
     /** Search the entire Dropbox for folders named "NAPA Admin Data". */
-    findNapaAdminFolders: () => electron.ipcRenderer.invoke("dropbox:findNapaAdminFolders")
+    findNapaAdminFolders: () => electron.ipcRenderer.invoke("dropbox:findNapaAdminFolders"),
+    /**
+     * Test whether a folder path is accessible in Dropbox and whether the
+     * "NAPA Admin Data" subfolder already exists inside it.
+     * Returns ok:true with a human-readable message on success, or
+     * ok:false with the Dropbox error message on failure.
+     */
+    testFolderPath: (path) => electron.ipcRenderer.invoke("dropbox:testFolderPath", path)
   }
 };
 electron.contextBridge.exposeInMainWorld("electronAPI", api);

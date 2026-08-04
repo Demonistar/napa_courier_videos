@@ -14,20 +14,9 @@ interface LocationFormProps {
   allLocations: Location[];
   onSave: (data: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onCancel: () => void;
-  /**
-   * Called whenever a key required field changes.
-   * Used by the guided tour to know when each field is filled so it can
-   * enable the "Next" button.  Only wired when the tour is active.
-   */
-  onTourFieldChange?: (fields: {
-    state: string;
-    city: string;
-    siteName: string;
-    address: string;
-  }) => void;
 }
 
-export function LocationForm({ location, allLocations, onSave, onCancel, onTourFieldChange }: LocationFormProps) {
+export function LocationForm({ location, allLocations, onSave, onCancel }: LocationFormProps) {
   const [state, setState] = useState(location?.state || '');
   const [city, setCity] = useState(location?.city || '');
   const [siteName, setSiteName] = useState(location?.siteName || '');
@@ -55,11 +44,6 @@ export function LocationForm({ location, allLocations, onSave, onCancel, onTourF
     );
     return Array.from(cities).sort();
   }, [allLocations, state]);
-
-  // Report key field values to the tour so it can enable/disable "Next".
-  useEffect(() => {
-    onTourFieldChange?.({ state, city, siteName, address });
-  }, [state, city, siteName, address, onTourFieldChange]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -121,35 +105,27 @@ export function LocationForm({ location, allLocations, onSave, onCancel, onTourF
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="space-y-4">
+          <ComboboxField
+            label="State"
+            value={state}
+            onChange={setState}
+            options={stateOptions}
+            placeholder="Select or add state"
+            searchPlaceholder="Search states..."
+            testId="input-state"
+          />
 
-          {/* ── State ── data-tour-id used by guided tour highlight ── */}
-          <div data-tour-id="field-state">
-            <ComboboxField
-              label="State"
-              value={state}
-              onChange={setState}
-              options={stateOptions}
-              placeholder="Select or add state"
-              searchPlaceholder="Search states..."
-              testId="input-state"
-            />
-          </div>
+          <ComboboxField
+            label="City"
+            value={city}
+            onChange={setCity}
+            options={cityOptions}
+            placeholder="Select or add city"
+            searchPlaceholder="Search cities..."
+            testId="input-city"
+          />
 
-          {/* ── City ── */}
-          <div data-tour-id="field-city">
-            <ComboboxField
-              label="City"
-              value={city}
-              onChange={setCity}
-              options={cityOptions}
-              placeholder="Select or add city"
-              searchPlaceholder="Search cities..."
-              testId="input-city"
-            />
-          </div>
-
-          {/* ── Site Name ── */}
-          <div data-tour-id="field-site-name">
+          <div>
             <Label htmlFor="siteName">Site Name</Label>
             <Input
               id="siteName"
@@ -160,8 +136,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel, onTourF
             />
           </div>
 
-          {/* ── Account Number ── */}
-          <div data-tour-id="field-account-number">
+          <div>
             <Label htmlFor="accountNumber">Account Number</Label>
             <Input
               id="accountNumber"
@@ -172,8 +147,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel, onTourF
             />
           </div>
 
-          {/* ── Address ── */}
-          <div data-tour-id="field-address">
+          <div>
             <Label htmlFor="address">Address</Label>
             <Textarea
               id="address"
@@ -250,11 +224,7 @@ export function LocationForm({ location, allLocations, onSave, onCancel, onTourF
         </div>
       </div>
 
-      {/* ── Form actions — highlighted as a tour step ───────────────── */}
-      <div
-        className="flex items-center justify-end gap-3 p-4 border-t bg-card"
-        data-tour-id="form-actions"
-      >
+      <div className="flex items-center justify-end gap-3 p-4 border-t bg-card">
         <Button variant="outline" onClick={onCancel} data-testid="button-cancel">
           Cancel
         </Button>

@@ -1,8 +1,11 @@
 "use strict";
 const electron = require("electron");
 const electronUpdater = require("electron-updater");
-const node_http = require("node:http");
+const promises = require("node:fs/promises");
+const node_os = require("node:os");
 const path = require("node:path");
+const node_http = require("node:http");
+const node_child_process = require("node:child_process");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const NETWORK_ERROR_CODES = [
@@ -17,9 +20,32 @@ function isNetworkError(err) {
   const msg = (err?.message ?? "") + (err?.code ?? "");
   return NETWORK_ERROR_CODES.some((code) => msg.includes(code));
 }
+const WRITE_ERROR_CODES = ["ENOSPC", "EACCES", "EPERM"];
 let _updateDownloaded = false;
 let _manualCheckPending = false;
 let _checkForUpdatesMenuItem = null;
+function isChecksumError(err) {
+  const msg = (err?.message ?? "").toLowerCase();
+  return msg.includes("sha512") || msg.includes("sha256") || msg.includes("checksum") || msg.includes("hash") || msg.includes("signature") || msg.includes("integrity");
+}
+function getUpdaterCachePendingDir(platform = process.platform, env = process.env, homeDir = node_os.homedir()) {
+  let cacheBase;
+  if (platform === "win32") {
+    cacheBase = env["LOCALAPPDATA"] ?? path.join(homeDir, "AppData", "Local");
+  } else if (platform === "darwin") {
+    cacheBase = path.join(homeDir, "Library", "Caches");
+  } else {
+    cacheBase = env["XDG_CACHE_HOME"] ?? path.join(homeDir, ".cache");
+  }
+  return path.join(cacheBase, `${electron.app.getName()}-updater`, "pending");
+}
+function isWriteError(err) {
+  const msg = (err?.message ?? "") + (err?.code ?? "");
+  return WRITE_ERROR_CODES.some((code) => msg.includes(code));
+}
+function isRunningFromAppImage() {
+  return process.platform === "linux" && Boolean(process.env.APPIMAGE);
+}
 function getUpdateDownloaded() {
   return _updateDownloaded;
 }
@@ -48,6 +74,15 @@ function checkForUpdatesManually(win) {
     });
     return;
   }
+  if (process.platform === "linux" && !isRunningFromAppImage()) {
+    electron.dialog.showMessageBox(win, {
+      type: "info",
+      title: "Updates unavailable",
+      message: "This copy of NAPA Courier Admin was not launched from the AppImage.",
+      detail: "To receive automatic updates, download the latest .AppImage from GitHub Releases and run that file directly."
+    });
+    return;
+  }
   if (_updateDownloaded) {
     showRestartDialog(win);
     return;
@@ -61,6 +96,10 @@ function checkForUpdatesManually(win) {
 }
 function initAutoUpdater(win) {
   if (!electron.app.isPackaged) return;
+  if (process.platform === "linux" && !isRunningFromAppImage()) {
+    console.log("[auto-updater] Linux: not running from AppImage — auto-updates skipped");
+    return;
+  }
   electronUpdater.autoUpdater.autoDownload = true;
   electronUpdater.autoUpdater.autoInstallOnAppQuit = true;
   electronUpdater.autoUpdater.on("update-not-available", () => {
@@ -74,6 +113,9 @@ function initAutoUpdater(win) {
       });
     }
   });
+  electronUpdater.autoUpdater.on("download-progress", (info) => {
+    win.webContents.send("app:downloadProgress", info);
+  });
   electronUpdater.autoUpdater.on("update-downloaded", () => {
     _updateDownloaded = true;
     _manualCheckPending = false;
@@ -84,10 +126,22 @@ function initAutoUpdater(win) {
   electronUpdater.autoUpdater.on("error", (err) => {
     const wasManual = _manualCheckPending;
     _manualCheckPending = false;
+    _updateDownloaded = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error("[auto-updater] error:", err?.message ?? err);
+    win.webContents.send("app:updateCancelled");
+    if (isWriteError(err) || isChecksumError(err)) {
+      void cleanUpdaterTempDir();
+    }
     if (wasManual) {
-      const detail = isNetworkError(err) ? "Could not reach the update server — check your internet connection and try again." : err?.message ?? "An unexpected error occurred. Please try again later.";
+      let detail;
+      if (isNetworkError(err)) {
+        detail = "Could not reach the update server — check your internet connection and try again.";
+      } else if (isWriteError(err)) {
+        detail = "Not enough disk space or insufficient permissions to save the update. Free up disk space or check folder permissions, then try again.";
+      } else {
+        detail = err?.message ?? "An unexpected error occurred. Please try again later.";
+      }
       electron.dialog.showMessageBox(win, {
         type: "warning",
         title: "Update check failed",
@@ -99,6 +153,15 @@ function initAutoUpdater(win) {
   electronUpdater.autoUpdater.checkForUpdates().catch((err) => {
     console.error("[auto-updater] startup check failed:", err?.message ?? err);
   });
+}
+async function cleanUpdaterTempDir() {
+  try {
+    const pendingDir = getUpdaterCachePendingDir();
+    await promises.rm(pendingDir, { recursive: true, force: true });
+    console.info("[auto-updater] cleaned pending update directory:", pendingDir);
+  } catch (err) {
+    console.warn("[auto-updater] temp-dir cleanup failed:", err?.message ?? err);
+  }
 }
 const DROPBOX_APP_KEY = "2nrt3uf9qy4oosn";
 const DEFAULT_FOLDER_PATH = "/Delivery Optimization/Delivery Walk Through Videos";
@@ -550,19 +613,70 @@ function registerIpcHandlers() {
     updateDownloaded: getUpdateDownloaded()
   }));
   electron.ipcMain.handle("app:quitAndInstall", () => {
-    if (getUpdateDownloaded()) electronUpdater.autoUpdater.quitAndInstall();
+    if (getUpdateDownloaded()) {
+      electron.BrowserWindow.getAllWindows()[0]?.webContents.send("app:updateCancelled");
+      electronUpdater.autoUpdater.quitAndInstall();
+    }
+  });
+  electron.ipcMain.handle("app:getPlatform", () => {
+    const platform = process.platform;
+    let appBundlePath = null;
+    if (platform === "darwin") {
+      appBundlePath = electron.app.getPath("exe").replace(/\/Contents\/MacOS\/[^/]+$/, "");
+    }
+    return { platform, appBundlePath };
+  });
+  electron.ipcMain.handle("app:uninstall", () => {
+    if (process.platform === "win32") {
+      const installDir = path.dirname(electron.app.getPath("exe"));
+      const uninstallerPath = path.join(installDir, `Uninstall ${electron.app.getName()}.exe`);
+      if (!fs.existsSync(uninstallerPath)) {
+        return {
+          ok: false,
+          platform: "win32",
+          error: `Uninstaller not found at:
+${uninstallerPath}
+
+You can remove the app manually via Windows Settings → Apps → Installed apps.`
+        };
+      }
+      const child = node_child_process.spawn(uninstallerPath, [], { detached: true, stdio: "ignore" });
+      child.unref();
+      setTimeout(() => electron.app.quit(), 400);
+      return { ok: true, platform: "win32" };
+    }
+    if (process.platform === "darwin") {
+      const appBundlePath = electron.app.getPath("exe").replace(/\/Contents\/MacOS\/[^/]+$/, "");
+      return { ok: true, platform: "darwin", appBundlePath };
+    }
+    return { ok: false, platform: process.platform, error: "Uninstall is not supported on this platform." };
   });
   electron.ipcMain.handle("dropbox:listFolder", async (_event, path2) => {
     try {
-      const resp = await dbxApi("/files/list_folder", {
+      const firstResp = await dbxApi("/files/list_folder", {
         path: path2,
         // '' = root; '/Foo/Bar' = subfolder
         include_non_downloadable_files: false
       });
-      if (resp.status === 409) return { ok: true, folders: [] };
-      if (!resp.ok) throw new Error(`List failed: ${resp.status}`);
-      const data = await resp.json();
-      const folders = data.entries.filter((e) => e[".tag"] === "folder").map((e) => ({ name: e.name, pathDisplay: e.path_display, pathLower: e.path_lower }));
+      if (firstResp.status === 409) return { ok: true, folders: [] };
+      if (!firstResp.ok) throw new Error(`List failed: ${firstResp.status}`);
+      let page = await firstResp.json();
+      const allEntries = [...page.entries];
+      while (page.has_more) {
+        const token = await getValidToken();
+        const contResp = await fetch("https://api.dropboxapi.com/2/files/list_folder/continue", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token.accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ cursor: page.cursor })
+        });
+        if (!contResp.ok) throw new Error(`List continue failed: ${contResp.status}`);
+        page = await contResp.json();
+        allEntries.push(...page.entries);
+      }
+      const folders = allEntries.filter((e) => e[".tag"] === "folder").map((e) => ({ name: e.name, pathDisplay: e.path_display, pathLower: e.path_lower }));
       return { ok: true, folders };
     } catch (err) {
       return { ok: false, error: err.message, folders: [] };
@@ -586,6 +700,34 @@ function registerIpcHandlers() {
       return { ok: true, folders };
     } catch (err) {
       return { ok: false, error: err.message, folders: [] };
+    }
+  });
+  electron.ipcMain.handle("dropbox:testFolderPath", async (_event, testPath) => {
+    try {
+      const normalized = (testPath ?? "").replace(/\/$/, "");
+      const napaDataPath = normalized ? `${normalized}/NAPA Admin Data` : "/NAPA Admin Data";
+      const napaResp = await dbxApi("/files/get_metadata", { path: napaDataPath });
+      if (napaResp.ok) {
+        return { ok: true, message: "✓ Found existing data folder" };
+      }
+      if (napaResp.status === 409) {
+        if (!normalized) {
+          return { ok: true, message: "✓ Path is accessible (no data yet)" };
+        }
+        const parentResp = await dbxApi("/files/get_metadata", { path: normalized });
+        if (parentResp.ok) {
+          return { ok: true, message: "✓ Path is accessible (no data yet)" };
+        }
+        if (parentResp.status === 409) {
+          return { ok: false, error: `Folder not found in your Dropbox: ${normalized}` };
+        }
+        const errText2 = await parentResp.text().catch(() => String(parentResp.status));
+        return { ok: false, error: `Dropbox error ${parentResp.status}: ${errText2}` };
+      }
+      const errText = await napaResp.text().catch(() => String(napaResp.status));
+      return { ok: false, error: `Dropbox error ${napaResp.status}: ${errText}` };
+    } catch (err) {
+      return { ok: false, error: err.message };
     }
   });
 }
