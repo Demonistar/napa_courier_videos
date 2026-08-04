@@ -17,6 +17,13 @@ import {
 } from '@/components/ui/tooltip';
 import { DropboxUserInfo } from '@/hooks/use-dropbox-user';
 
+interface DownloadProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
 interface TopBarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
@@ -35,7 +42,13 @@ interface TopBarProps {
   onOpenGenerateLinks: () => void;
   dropboxUser: DropboxUserInfo;
   updateReady?: boolean;
+  downloadProgress?: DownloadProgress | null;
 }
+
+// Radius and circumference for the SVG progress ring drawn around the Settings button.
+// The button is 40×40 px (shadcn `size="icon"`); r=18 keeps the ring just inside the edge.
+const RING_R = 18;
+const RING_C = 2 * Math.PI * RING_R; // ≈ 113.1
 
 export function TopBar({
   searchQuery,
@@ -55,7 +68,11 @@ export function TopBar({
   onOpenGenerateLinks,
   dropboxUser,
   updateReady = false,
+  downloadProgress = null,
 }: TopBarProps) {
+  const isDownloading = downloadProgress !== null && !updateReady;
+  const pct = Math.max(0, Math.min(100, downloadProgress?.percent ?? 0));
+  const dashOffset = RING_C * (1 - pct / 100);
   return (
     <div className="h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0">
       {/* Brand */}
@@ -176,6 +193,43 @@ export function TopBar({
               className="relative"
             >
               <Settings className="w-5 h-5" />
+
+              {/* Download-in-progress ring — shown while an update is downloading */}
+              {isDownloading && (
+                <svg
+                  aria-label={`Downloading update… ${Math.round(pct)}%`}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  viewBox="0 0 40 40"
+                  data-testid="download-progress-ring"
+                >
+                  {/* Track */}
+                  <circle
+                    cx="20"
+                    cy="20"
+                    r={RING_R}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="text-muted-foreground/20"
+                  />
+                  {/* Progress arc */}
+                  <circle
+                    cx="20"
+                    cy="20"
+                    r={RING_R}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray={RING_C}
+                    strokeDashoffset={dashOffset}
+                    transform="rotate(-90 20 20)"
+                    className="text-blue-500 transition-[stroke-dashoffset] duration-300 ease-linear"
+                  />
+                </svg>
+              )}
+
+              {/* Update-ready green dot — shown once download is complete */}
               {updateReady && (
                 <span
                   aria-label="Update available"
@@ -185,7 +239,11 @@ export function TopBar({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            {updateReady ? 'Update ready — open Settings to install' : 'Settings & Dropbox'}
+            {updateReady
+              ? 'Update ready — open Settings to install'
+              : isDownloading
+                ? `Downloading update… ${Math.round(pct)}%`
+                : 'Settings & Dropbox'}
           </TooltipContent>
         </Tooltip>
 

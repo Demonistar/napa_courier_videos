@@ -339,6 +339,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onOpenGenerateLinks={() => setGenerateLinksOpen(true)}
         dropboxUser={dropboxUser}
         updateReady={updateReady}
+        downloadProgress={downloadProgress}
       />
 
       <div className="flex-1 overflow-hidden">
