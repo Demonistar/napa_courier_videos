@@ -26179,7 +26179,8 @@ function TopBar({
   onOpenBackup,
   onOpenImport,
   onOpenGenerateLinks,
-  dropboxUser
+  dropboxUser,
+  updateReady = false
 }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 shrink-0", children: [
@@ -26281,17 +26282,27 @@ function TopBar({
         ] })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(Tooltip, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
           Button,
           {
             variant: "ghost",
             size: "icon",
             onClick: onOpenSettings,
             "data-testid": "button-settings",
-            children: /* @__PURE__ */ jsxRuntimeExports.jsx(Settings, { className: "w-5 h-5" })
+            className: "relative",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Settings, { className: "w-5 h-5" }),
+              updateReady && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "span",
+                {
+                  "aria-label": "Update available",
+                  className: "absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 ring-1 ring-background pointer-events-none"
+                }
+              )
+            ]
           }
         ) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipContent, { children: "Settings & Dropbox" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipContent, { children: updateReady ? "Update ready — open Settings to install" : "Settings & Dropbox" })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(DropdownMenu, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "ghost", size: "icon", "data-testid": "button-help", children: /* @__PURE__ */ jsxRuntimeExports.jsx(CircleQuestionMark, { className: "w-5 h-5" }) }) }),
@@ -75466,7 +75477,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-D1L9zkZU.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-CzOXT142.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
