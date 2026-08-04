@@ -28,6 +28,12 @@ const api = {
       return () => electron.ipcRenderer.removeListener("app:updateReady", handler);
     },
     quitAndInstall: () => electron.ipcRenderer.invoke("app:quitAndInstall")
+  },
+  dropbox: {
+    /** List immediate subfolders at a Dropbox path. Pass '' for the root. */
+    listFolder: (path) => electron.ipcRenderer.invoke("dropbox:listFolder", path),
+    /** Search the entire Dropbox for folders named "NAPA Admin Data". */
+    findNapaAdminFolders: () => electron.ipcRenderer.invoke("dropbox:findNapaAdminFolders")
   }
 };
 electron.contextBridge.exposeInMainWorld("electronAPI", api);

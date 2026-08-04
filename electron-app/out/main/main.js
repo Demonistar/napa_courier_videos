@@ -101,7 +101,7 @@ function initAutoUpdater(win) {
   });
 }
 const DROPBOX_APP_KEY = "2nrt3uf9qy4oosn";
-const DEFAULT_FOLDER_PATH = "/Delivery Optimization";
+const DEFAULT_FOLDER_PATH = "/Delivery Optimization/Delivery Walk Through Videos";
 const USER_DATA = electron.app.getPath("userData");
 const TOKEN_FILE = path.join(USER_DATA, "dropbox-token.enc");
 const SETTINGS_FILE = path.join(USER_DATA, "app-settings.json");
@@ -347,7 +347,7 @@ h1{color:#16a34a;margin:0 0 .5rem}p{color:#6b7280;margin:0}</style></head>
   return token;
 }
 function folderPath(folder, file) {
-  return `${folder.replace(/\/$/, "")}/${file}`;
+  return `${folder.replace(/\/$/, "")}/NAPA Admin Data/${file}`;
 }
 async function loadStagingFile(folder) {
   const result = await dbxDownload(folderPath(folder, "locations-staging.json"));
@@ -541,6 +541,9 @@ function registerIpcHandlers() {
   electron.ipcMain.handle("settings:get", () => loadSettings());
   electron.ipcMain.handle("settings:set", (_event, updates) => {
     saveSettings(updates);
+    if (updates.theme) {
+      electron.nativeTheme.themeSource = updates.theme;
+    }
   });
   electron.ipcMain.handle("app:getVersion", () => electron.app.getVersion());
   electron.ipcMain.handle("app:getUpdateStatus", () => ({
@@ -548,6 +551,42 @@ function registerIpcHandlers() {
   }));
   electron.ipcMain.handle("app:quitAndInstall", () => {
     if (getUpdateDownloaded()) electronUpdater.autoUpdater.quitAndInstall();
+  });
+  electron.ipcMain.handle("dropbox:listFolder", async (_event, path2) => {
+    try {
+      const resp = await dbxApi("/files/list_folder", {
+        path: path2,
+        // '' = root; '/Foo/Bar' = subfolder
+        include_non_downloadable_files: false
+      });
+      if (resp.status === 409) return { ok: true, folders: [] };
+      if (!resp.ok) throw new Error(`List failed: ${resp.status}`);
+      const data = await resp.json();
+      const folders = data.entries.filter((e) => e[".tag"] === "folder").map((e) => ({ name: e.name, pathDisplay: e.path_display, pathLower: e.path_lower }));
+      return { ok: true, folders };
+    } catch (err) {
+      return { ok: false, error: err.message, folders: [] };
+    }
+  });
+  electron.ipcMain.handle("dropbox:findNapaAdminFolders", async () => {
+    try {
+      const resp = await dbxApi("/files/search_v2", {
+        query: "NAPA Admin Data",
+        options: { filename_only: true }
+      });
+      if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
+      const data = await resp.json();
+      const folders = (data.matches ?? []).filter(
+        (m) => m?.metadata?.metadata?.[".tag"] === "folder" && m?.metadata?.metadata?.name?.toLowerCase() === "napa admin data"
+      ).map((m) => ({
+        name: m.metadata.metadata.name,
+        pathDisplay: m.metadata.metadata.path_display,
+        pathLower: m.metadata.metadata.path_lower
+      }));
+      return { ok: true, folders };
+    } catch (err) {
+      return { ok: false, error: err.message, folders: [] };
+    }
   });
 }
 function buildAppMenu(win) {
@@ -679,7 +718,7 @@ function createMainWindow() {
   return win;
 }
 electron.app.whenReady().then(() => {
-  electron.nativeTheme.themeSource = "light";
+  electron.nativeTheme.themeSource = loadSettings().theme ?? "light";
   registerIpcHandlers();
   const win = createMainWindow();
   buildAppMenu(win);
