@@ -35,6 +35,7 @@ function stubElectronAPI(quitAndInstall = vi.fn()) {
     value: {
       app: {
         getVersion: vi.fn().mockResolvedValue('1.0.0'),
+        getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
         quitAndInstall,
       },
       settings: {

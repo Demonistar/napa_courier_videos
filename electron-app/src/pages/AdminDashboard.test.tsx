@@ -67,16 +67,21 @@ vi.mock('@/hooks/use-toast', () => ({
 type UpdateReadyListener = () => void;
 
 function makeElectronAPI(updateDownloaded: boolean) {
-  // Capture the listener so tests can fire it programmatically.
-  let storedListener: UpdateReadyListener | null = null;
+  // Capture the listeners so tests can fire them programmatically.
+  let storedReadyListener: UpdateReadyListener | null = null;
+  let storedCancelledListener: UpdateReadyListener | null = null;
 
   const api = {
     app: {
       getUpdateStatus: vi.fn().mockResolvedValue({ updateDownloaded }),
       onUpdateReady: vi.fn().mockImplementation((cb: UpdateReadyListener) => {
-        storedListener = cb;
+        storedReadyListener = cb;
         // Return cleanup function.
-        return () => { storedListener = null; };
+        return () => { storedReadyListener = null; };
+      }),
+      onUpdateCancelled: vi.fn().mockImplementation((cb: UpdateReadyListener) => {
+        storedCancelledListener = cb;
+        return () => { storedCancelledListener = null; };
       }),
     },
     auth: {
@@ -91,12 +96,15 @@ function makeElectronAPI(updateDownloaded: boolean) {
     },
   };
 
-  // Expose a helper to fire the push event in tests.
-  (api as typeof api & { _fireUpdateReady: () => void })._fireUpdateReady = () => {
-    storedListener?.();
+  // Expose helpers to fire push events in tests.
+  (api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void })._fireUpdateReady = () => {
+    storedReadyListener?.();
+  };
+  (api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void })._fireUpdateCancelled = () => {
+    storedCancelledListener?.();
   };
 
-  return api as typeof api & { _fireUpdateReady: () => void };
+  return api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void };
 }
 
 function setElectronAPI(api: ReturnType<typeof makeElectronAPI>) {

@@ -9,8 +9,9 @@
 
 import { app, dialog, BrowserWindow, MenuItem } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import path from 'node:path';
-import fs from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // ─── Network-error classification ─────────────────────────────────────────────
 
@@ -29,8 +30,8 @@ export function isNetworkError(err: Error): boolean {
   return NETWORK_ERROR_CODES.some((code) => msg.includes(code));
 }
 
-// ─── Module-level updater state ────────────────────────────────────────────────
-
+/** Error codes that mean a local write to disk failed (disk full, permission denied). */
+export const WRITE_ERROR_CODES = ['ENOSPC', 'EACCES', 'EPERM'] as const;
 export let _updateDownloaded = false;
 export let _manualCheckPending = false;
 export let _checkForUpdatesMenuItem: MenuItem | null = null;
@@ -41,7 +42,6 @@ export function resetUpdaterStateForTesting(): void {
   _manualCheckPending = false;
   _checkForUpdatesMenuItem = null;
 }
-
 /**
  * Returns true when the error looks like a checksum / hash / signature failure
  * rather than a network problem.  Used to decide whether to wipe the local
@@ -60,13 +60,39 @@ export function isChecksumError(err: Error): boolean {
 }
 
 /**
- * Returns true when the error is a local write failure (disk full, permission
- * denied).  These can leave partial files in the pending cache that must be
- * wiped the same way a checksum failure would be.
+ * Resolve the OS-level application cache base directory.
+ * Mirrors the logic in electron-updater's ElectronAppAdapter / AppAdapter so
+ * we target the same directory the updater writes to.
+ *
+ * - Windows : %LOCALAPPDATA%  (falls back to ~/AppData/Local)
+ * - macOS   : ~/Library/Caches
+ * - Linux   : $XDG_CACHE_HOME (falls back to ~/.cache)
+ *
+ * @internal exported so tests can assert platform-specific paths without
+ * touching the real filesystem.
  */
+export function getUpdaterCachePendingDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = homedir(),
+): string {
+  let cacheBase: string;
+  if (platform === 'win32') {
+    cacheBase = env['LOCALAPPDATA'] ?? join(homeDir, 'AppData', 'Local');
+  } else if (platform === 'darwin') {
+    cacheBase = join(homeDir, 'Library', 'Caches');
+  } else {
+    cacheBase = env['XDG_CACHE_HOME'] ?? join(homeDir, '.cache');
+  }
+  // electron-updater stores pending downloads under
+  //   <cacheBase>/<updaterCacheDirName>/pending
+  // where updaterCacheDirName defaults to "<appName>-updater" (the builder
+  // appends the "-updater" suffix when writing app-update.yml at build time).
+  return join(cacheBase, `${app.getName()}-updater`, 'pending');
+}
 export function isWriteError(err: Error): boolean {
-  const code = ((err as Error & { code?: string }).code) ?? '';
-  return code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM';
+  const msg = (err?.message ?? '') + (((err as Error & { code?: string })?.code) ?? '');
+  return WRITE_ERROR_CODES.some((code) => msg.includes(code));
 }
 
 /**
@@ -81,34 +107,6 @@ export function isWriteError(err: Error): boolean {
  */
 export function isRunningFromAppImage(): boolean {
   return process.platform === 'linux' && Boolean(process.env.APPIMAGE);
-}
-
-/**
- * Delete the electron-updater "pending" download cache so a corrupt or
- * partially-written file cannot cause an infinite retry loop on the next
- * update check.
- *
- * electron-updater stores downloads at:
- *   <userData>/../<appName>-updater/pending/
- * (same convention on Windows and macOS).
- */
-function clearUpdateCache(): void {
-  try {
-    const pendingDir = path.join(
-      app.getPath('userData'),
-      '..',
-      `${app.getName()}-updater`,
-      'pending',
-    );
-    if (fs.existsSync(pendingDir)) {
-      fs.rmSync(pendingDir, { recursive: true, force: true });
-      console.log('[auto-updater] cleared pending cache:', pendingDir);
-    }
-  } catch (e) {
-    // Non-fatal — log and continue.  A leftover file is annoying but the
-    // error handler has already reset _updateDownloaded, so the badge is gone.
-    console.warn('[auto-updater] could not clear update cache:', (e as Error)?.message ?? e);
-  }
 }
 
 /** Whether an update has been fully downloaded and is waiting to install. */
@@ -247,18 +245,25 @@ export function initAutoUpdater(win: BrowserWindow): void {
     // Tell the renderer to dismiss the in-app update badge.
     win.webContents.send('app:updateCancelled');
 
-    // Wipe the pending download cache when the error could leave a corrupt or
-    // partial file on disk — checksum/hash failures and write errors (ENOSPC,
-    // EACCES, EPERM).  This prevents an infinite re-download loop where
-    // electron-updater retries against the same bad cached file.
-    if (isChecksumError(err as Error) || isWriteError(err as Error)) {
-      clearUpdateCache();
+    // Remove the pending download directory so a corrupt or partially-written
+    // file cannot block the next update attempt.  Triggered on:
+    //   • write errors (ENOSPC, EACCES, EPERM) — disk or permission problems
+    //   • checksum / hash / integrity errors    — corrupt or tampered file
+    if (isWriteError(err as Error) || isChecksumError(err as Error)) {
+      void cleanUpdaterTempDir();
     }
 
     if (wasManual) {
-      const detail = isNetworkError(err as Error)
-        ? 'Could not reach the update server — check your internet connection and try again.'
-        : ((err as Error)?.message ?? 'An unexpected error occurred. Please try again later.');
+      let detail: string;
+      if (isNetworkError(err as Error)) {
+        detail = 'Could not reach the update server — check your internet connection and try again.';
+      } else if (isWriteError(err as Error)) {
+        detail =
+          'Not enough disk space or insufficient permissions to save the update. ' +
+          'Free up disk space or check folder permissions, then try again.';
+      } else {
+        detail = (err as Error)?.message ?? 'An unexpected error occurred. Please try again later.';
+      }
       dialog.showMessageBox(win, {
         type: 'warning',
         title: 'Update check failed',
@@ -273,4 +278,22 @@ export function initAutoUpdater(win: BrowserWindow): void {
   autoUpdater.checkForUpdates().catch((err) => {
     console.error('[auto-updater] startup check failed:', err?.message ?? err);
   });
+}
+
+/**
+ * Attempt to remove the electron-updater pending download directory so that a
+ * partially-written (or zero-byte) file from a failed write or checksum error
+ * does not prevent the next update attempt from re-downloading.
+ *
+ * Failures are swallowed and logged — cleanup is best-effort and must never
+ * block the error-handling flow.
+ */
+export async function cleanUpdaterTempDir(): Promise<void> {
+  try {
+    const pendingDir = getUpdaterCachePendingDir();
+    await rm(pendingDir, { recursive: true, force: true });
+    console.info('[auto-updater] cleaned pending update directory:', pendingDir);
+  } catch (err) {
+    console.warn('[auto-updater] temp-dir cleanup failed:', (err as Error)?.message ?? err);
+  }
 }

@@ -8,15 +8,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import path from 'node:path';
-
 // ─── Hoisted mock objects ─────────────────────────────────────────────────────
 // vi.mock factories are hoisted to the top of the file, so any variables they
 // reference must also be hoisted via vi.hoisted().
 // We use require() inside vi.hoisted so Node built-ins are available before any
 // ESM imports are initialized.
 
-const { mockAutoUpdater, mockDialog, mockApp, mockFs } = vi.hoisted(() => {
+const { mockAutoUpdater, mockDialog, mockApp, mockRm } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require('node:events') as typeof import('node:events');
   const emitter = new EventEmitter();
@@ -34,16 +32,13 @@ const { mockAutoUpdater, mockDialog, mockApp, mockFs } = vi.hoisted(() => {
   const mockApp = {
     isPackaged: true,
     getVersion: vi.fn().mockReturnValue('1.2.3'),
-    getPath: vi.fn().mockReturnValue('/fake/userData'),
-    getName: vi.fn().mockReturnValue('NAPA Courier Admin'),
+    getPath: vi.fn().mockReturnValue('/mock/userData'),
+    getName: vi.fn().mockReturnValue('napa-courier-admin'),
   };
 
-  const mockFs = {
-    existsSync: vi.fn().mockReturnValue(true),
-    rmSync: vi.fn(),
-  };
+  const mockRm = vi.fn().mockResolvedValue(undefined);
 
-  return { mockAutoUpdater, mockDialog, mockApp, mockFs };
+  return { mockAutoUpdater, mockDialog, mockApp, mockRm };
 });
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
@@ -57,15 +52,20 @@ vi.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
-vi.mock('node:fs', () => ({ default: mockFs }));
+vi.mock('node:fs/promises', () => ({
+  rm: mockRm,
+}));
 
 // ─── Subject under test ───────────────────────────────────────────────────────
 
 import {
   isNetworkError,
   NETWORK_ERROR_CODES,
-  isChecksumError,
   isWriteError,
+  WRITE_ERROR_CODES,
+  isChecksumError,
+  cleanUpdaterTempDir,
+  getUpdaterCachePendingDir,
   isRunningFromAppImage,
   initAutoUpdater,
   checkForUpdatesManually,
@@ -133,6 +133,171 @@ describe('isNetworkError', () => {
   });
 });
 
+// ─── isWriteError ─────────────────────────────────────────────────────────────
+
+describe('isWriteError', () => {
+  it('returns true when the error message contains ENOSPC', () => {
+    expect(isWriteError(makeError('ENOSPC: no space left on device'))).toBe(true);
+  });
+
+  it('returns true when the error code is ENOSPC', () => {
+    expect(isWriteError(makeError('write ENOSPC /tmp/update.exe', 'ENOSPC'))).toBe(true);
+  });
+
+  it('returns true when the error message contains EACCES', () => {
+    expect(isWriteError(makeError("EACCES: permission denied, open '/tmp/update.exe'"))).toBe(true);
+  });
+
+  it('returns true when the error code is EACCES', () => {
+    expect(isWriteError(makeError('open /tmp/update.exe', 'EACCES'))).toBe(true);
+  });
+
+  it('returns true when the error message contains EPERM', () => {
+    expect(isWriteError(makeError('EPERM: operation not permitted'))).toBe(true);
+  });
+
+  it('returns true when the error code is EPERM', () => {
+    expect(isWriteError(makeError('operation not permitted', 'EPERM'))).toBe(true);
+  });
+
+  it('returns true for every listed write error code', () => {
+    for (const code of WRITE_ERROR_CODES) {
+      expect(
+        isWriteError(makeError(`write failed ${code}`, code)),
+        `expected ${code} to be a write error`,
+      ).toBe(true);
+    }
+  });
+
+  it('returns false for a network error', () => {
+    expect(isWriteError(makeError('getaddrinfo ENOTFOUND update.example.com'))).toBe(false);
+  });
+
+  it('returns false for a generic non-write error', () => {
+    expect(isWriteError(makeError('checksum mismatch for file: update.exe'))).toBe(false);
+  });
+});
+
+// ─── isChecksumError ──────────────────────────────────────────────────────────
+
+describe('isChecksumError', () => {
+  it('returns true for a checksum mismatch message', () => {
+    expect(isChecksumError(makeError('checksum mismatch for file: update.exe'))).toBe(true);
+  });
+
+  it('returns true for a sha512 verification failure', () => {
+    expect(isChecksumError(makeError('sha512 hash does not match'))).toBe(true);
+  });
+
+  it('returns true for an integrity error message', () => {
+    expect(isChecksumError(makeError('integrity check failed'))).toBe(true);
+  });
+
+  it('returns true for a signature verification failure', () => {
+    expect(isChecksumError(makeError('signature verification failed'))).toBe(true);
+  });
+
+  it('returns false for a network error', () => {
+    expect(isChecksumError(makeError('getaddrinfo ENOTFOUND update.example.com'))).toBe(false);
+  });
+
+  it('returns false for a write error', () => {
+    expect(isChecksumError(makeError('ENOSPC: no space left on device', 'ENOSPC'))).toBe(false);
+  });
+});
+
+// ─── getUpdaterCachePendingDir ────────────────────────────────────────────────
+//
+// Mirrors the path-resolution logic electron-updater uses for its cache dir so
+// the cleanup targets the actual pending-download folder on each platform.
+// Tests use contains/pattern assertions; path separators vary by host OS but
+// the important invariants are: (a) the correct cache base is chosen for each
+// platform, and (b) the path always ends with <appName>/pending.
+
+describe('getUpdaterCachePendingDir', () => {
+  const HOME = '/home/testuser';
+  const APP_NAME = 'napa-courier-admin';
+
+  beforeEach(() => {
+    mockApp.getName.mockReturnValue(APP_NAME);
+  });
+
+  it('uses LOCALAPPDATA on Windows when the env var is set', () => {
+    const localAppData = '/mock/AppData/Local';
+    const result = getUpdaterCachePendingDir('win32', { LOCALAPPDATA: localAppData }, HOME);
+    // The cache base must come from LOCALAPPDATA, not the home dir.
+    expect(result).toContain(localAppData);
+    expect(result).not.toContain('AppData/Local/AppData');
+  });
+
+  it('falls back to ~/AppData/Local on Windows when LOCALAPPDATA is absent', () => {
+    const result = getUpdaterCachePendingDir('win32', {}, HOME);
+    expect(result).toContain(HOME);
+    expect(result).toContain('AppData');
+    expect(result).toContain('Local');
+  });
+
+  it('uses ~/Library/Caches on macOS', () => {
+    const result = getUpdaterCachePendingDir('darwin', {}, HOME);
+    expect(result).toContain(HOME);
+    expect(result).toContain('Library');
+    expect(result).toContain('Caches');
+  });
+
+  it('uses XDG_CACHE_HOME on Linux when the env var is set', () => {
+    const xdgCache = '/custom/cache';
+    const result = getUpdaterCachePendingDir('linux', { XDG_CACHE_HOME: xdgCache }, HOME);
+    expect(result).toContain(xdgCache);
+    // Must NOT fall back to ~/.cache when XDG_CACHE_HOME is set.
+    expect(result).not.toContain('.cache');
+  });
+
+  it('falls back to ~/.cache on Linux when XDG_CACHE_HOME is absent', () => {
+    const result = getUpdaterCachePendingDir('linux', {}, HOME);
+    expect(result).toContain(HOME);
+    expect(result).toContain('.cache');
+  });
+
+  it('always ends with <appName>-updater then "pending"', () => {
+    const result = getUpdaterCachePendingDir('darwin', {}, HOME);
+    // Normalise separators so the assertion works on any host OS.
+    const normalised = result.replace(/\\/g, '/');
+    const parts = normalised.split('/');
+    expect(parts.at(-1)).toBe('pending');
+    // electron-builder appends "-updater" to the app name when writing app-update.yml
+    expect(parts.at(-2)).toBe(`${APP_NAME}-updater`);
+  });
+});
+// ─── cleanUpdaterTempDir ──────────────────────────────────────────────────────
+
+describe('cleanUpdaterTempDir', () => {
+  beforeEach(() => {
+    mockRm.mockClear();
+    mockApp.getName.mockReturnValue('napa-courier-admin');
+  });
+
+  it('calls rm with { recursive: true, force: true } on the pending directory', async () => {
+    await cleanUpdaterTempDir();
+
+    expect(mockRm).toHaveBeenCalledOnce();
+    const [, opts] = mockRm.mock.calls[0] as [string, object];
+    expect(opts).toMatchObject({ recursive: true, force: true });
+  });
+
+  it('passes a path that ends with <appName>-updater/pending', async () => {
+    await cleanUpdaterTempDir();
+
+    const [dirPath] = mockRm.mock.calls[0] as [string, object];
+    expect(dirPath).toMatch(/napa-courier-admin-updater[/\\]pending$/);
+  });
+
+  it('does not throw when rm rejects (best-effort cleanup)', async () => {
+    mockRm.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
+
+    await expect(cleanUpdaterTempDir()).resolves.toBeUndefined();
+  });
+});
+
 // ─── Error event — manual check ───────────────────────────────────────────────
 
 describe('initAutoUpdater — error event (manual check)', () => {
@@ -171,13 +336,14 @@ describe('initAutoUpdater — error event (manual check)', () => {
     expect(opts.detail).toContain('internet connection');
   });
 
-  it('shows a generic error detail for a non-network failure (e.g. certificate error)', () => {
+  it('shows a generic error detail for a non-network, non-write failure (e.g. certificate error)', () => {
     mockAutoUpdater.emit('error', makeError('Certificate verification failed'));
 
     expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
     const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
     expect(opts.detail).toBe('Certificate verification failed');
     expect(opts.detail).not.toContain('internet connection');
+    expect(opts.detail).not.toContain('disk space');
   });
 
   it('re-enables the menu item after a manual-check error', () => {
@@ -290,6 +456,7 @@ describe('initAutoUpdater — download interruption (manual check)', () => {
     resetUpdaterStateForTesting();
     mockAutoUpdater.removeAllListeners();
     mockDialog.showMessageBox.mockClear();
+    mockRm.mockClear();
     mockAutoUpdater.checkForUpdates.mockClear();
     // Never resolves — simulates a check that is in flight when the error fires
     mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
@@ -331,27 +498,39 @@ describe('initAutoUpdater — download interruption (manual check)', () => {
     expect(opts.title).toBe('Update check failed');
     expect(opts.detail).toContain('checksum mismatch');
     expect(opts.detail).not.toContain('internet connection');
+    expect(opts.detail).not.toContain('disk space');
   });
 
-  it('shows a generic error dialog when the disk is full (ENOSPC)', () => {
+  it('shows a write-error dialog when the disk is full (ENOSPC)', () => {
     mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
 
     expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
     const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
     expect(opts.type).toBe('warning');
     expect(opts.title).toBe('Update check failed');
-    expect(opts.detail).toContain('ENOSPC');
+    expect(opts.detail).toContain('disk space');
     expect(opts.detail).not.toContain('internet connection');
   });
 
-  it('shows a generic error dialog when writing the update file is denied (EACCES)', () => {
-    mockAutoUpdater.emit('error', makeError('EACCES: permission denied, open \'/tmp/update.exe\'', 'EACCES'));
+  it('shows a write-error dialog when writing the update file is denied (EACCES)', () => {
+    mockAutoUpdater.emit('error', makeError("EACCES: permission denied, open '/tmp/update.exe'", 'EACCES'));
 
     expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
     const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
     expect(opts.type).toBe('warning');
     expect(opts.title).toBe('Update check failed');
-    expect(opts.detail).toContain('EACCES');
+    expect(opts.detail).toContain('permissions');
+    expect(opts.detail).not.toContain('internet connection');
+  });
+
+  it('shows a write-error dialog when the OS blocks the write (EPERM)', () => {
+    mockAutoUpdater.emit('error', makeError('EPERM: operation not permitted', 'EPERM'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('permissions');
     expect(opts.detail).not.toContain('internet connection');
   });
 
@@ -407,8 +586,75 @@ describe('initAutoUpdater — download interruption (startup / automatic check)'
   });
 
   it('stays silent when writing is denied during a background download (EACCES)', () => {
-    mockAutoUpdater.emit('error', makeError('EACCES: permission denied, open \'/tmp/update.exe\'', 'EACCES'));
+    mockAutoUpdater.emit('error', makeError("EACCES: permission denied, open '/tmp/update.exe'", 'EACCES'));
     expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Cleanup on write errors and checksum failures ───────────────────────────
+//
+// After ENOSPC, EACCES, EPERM, or a checksum/integrity failure, the
+// partially-written update cache must be removed so the next launch can
+// attempt a fresh download without hitting the corrupt file.
+
+describe('initAutoUpdater — temp-dir cleanup on write and checksum errors', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('triggers a cleanup when the disk is full (ENOSPC)', async () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+    // cleanUpdaterTempDir is async — wait for microtasks to flush
+    await Promise.resolve();
+    expect(mockRm).toHaveBeenCalledOnce();
+  });
+
+  it('triggers a cleanup when writing is denied (EACCES)', async () => {
+    mockAutoUpdater.emit('error', makeError("EACCES: permission denied, open '/tmp/update.exe'", 'EACCES'));
+    await Promise.resolve();
+    expect(mockRm).toHaveBeenCalledOnce();
+  });
+
+  it('triggers a cleanup when the OS blocks the write (EPERM)', async () => {
+    mockAutoUpdater.emit('error', makeError('EPERM: operation not permitted', 'EPERM'));
+    await Promise.resolve();
+    expect(mockRm).toHaveBeenCalledOnce();
+  });
+
+  it('triggers a cleanup for a checksum mismatch so the corrupt file is not retried', async () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    await Promise.resolve();
+    expect(mockRm).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT trigger a cleanup for a network error (ECONNRESET)', async () => {
+    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
+    await Promise.resolve();
+    expect(mockRm).not.toHaveBeenCalled();
+  });
+
+  it('does NOT trigger a cleanup for a generic non-write, non-checksum error', async () => {
+    mockAutoUpdater.emit('error', makeError('Certificate verification failed'));
+    await Promise.resolve();
+    expect(mockRm).not.toHaveBeenCalled();
+  });
+
+  it('does not throw if the cleanup itself fails', async () => {
+    mockRm.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
+    // Should not throw — cleanup errors are swallowed
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+    await Promise.resolve();
+    // No assertion needed — the test passes if no unhandled rejection occurs
   });
 });
 
@@ -552,271 +798,5 @@ describe('isWriteError', () => {
 
   it('returns false when there is no error code at all', () => {
     expect(isWriteError(makeError('something went wrong'))).toBe(false);
-  });
-});
-
-// ─── Update-cache cleanup ─────────────────────────────────────────────────────
-//
-// When a download fails due to a bad checksum or a write error, the pending
-// cache directory must be wiped so electron-updater does not retry against the
-// same corrupt or partial file on the next check.
-
-describe('initAutoUpdater — update-cache cleanup on download failure', () => {
-  const expectedPendingDir = path.join(
-    '/fake/userData',
-    '..',
-    'NAPA Courier Admin-updater',
-    'pending',
-  );
-
-  beforeEach(() => {
-    resetUpdaterStateForTesting();
-    mockAutoUpdater.removeAllListeners();
-    mockDialog.showMessageBox.mockClear();
-    mockWebContents.send.mockClear();
-    mockFs.existsSync.mockClear();
-    mockFs.rmSync.mockClear();
-    mockFs.existsSync.mockReturnValue(true);
-    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
-    initAutoUpdater(mockWin);
-  });
-
-  afterEach(() => {
-    mockAutoUpdater.removeAllListeners();
-    resetUpdaterStateForTesting();
-  });
-
-  it('wipes the pending cache when a checksum mismatch error fires', () => {
-    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
-  });
-
-  it('wipes the pending cache when a sha512 error fires', () => {
-    mockAutoUpdater.emit('error', makeError('sha512 hash mismatch'));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
-  });
-
-  it('wipes the pending cache when the disk is full (ENOSPC)', () => {
-    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
-  });
-
-  it('wipes the pending cache when writing is denied (EACCES)', () => {
-    mockAutoUpdater.emit('error', makeError('EACCES: permission denied', 'EACCES'));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
-  });
-
-  it('wipes the pending cache when writing is denied (EPERM)', () => {
-    mockAutoUpdater.emit('error', makeError('EPERM: operation not permitted', 'EPERM'));
-
-    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
-  });
-
-  it('does NOT wipe the cache for a plain network error (ENOTFOUND)', () => {
-    mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com', 'ENOTFOUND'));
-
-    expect(mockFs.rmSync).not.toHaveBeenCalled();
-  });
-
-  it('does NOT wipe the cache for a mid-transfer reset (ECONNRESET)', () => {
-    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
-
-    expect(mockFs.rmSync).not.toHaveBeenCalled();
-  });
-
-  it('skips rmSync when the pending directory does not exist', () => {
-    mockFs.existsSync.mockReturnValue(false);
-    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
-
-    expect(mockFs.existsSync).toHaveBeenCalledWith(expectedPendingDir);
-    expect(mockFs.rmSync).not.toHaveBeenCalled();
-  });
-
-  it('does not throw when rmSync fails (non-fatal)', () => {
-    mockFs.rmSync.mockImplementation(() => { throw new Error('EPERM rmSync failed'); });
-
-    expect(() => {
-      mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
-    }).not.toThrow();
-  });
-});
-
-// ─── isRunningFromAppImage ────────────────────────────────────────────────────
-
-describe('isRunningFromAppImage', () => {
-  const originalPlatform = process.platform;
-
-  afterEach(() => {
-    // Restore platform and clean up APPIMAGE env var after every test.
-    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
-    delete process.env.APPIMAGE;
-  });
-
-  it('returns true on Linux when APPIMAGE env var is set', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
-    expect(isRunningFromAppImage()).toBe(true);
-  });
-
-  it('returns false on Linux when APPIMAGE env var is absent', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    delete process.env.APPIMAGE;
-    expect(isRunningFromAppImage()).toBe(false);
-  });
-
-  it('returns false on Linux when APPIMAGE is an empty string', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    process.env.APPIMAGE = '';
-    expect(isRunningFromAppImage()).toBe(false);
-  });
-
-  it('returns false on Windows even when APPIMAGE is set', () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    process.env.APPIMAGE = '/some/path';
-    expect(isRunningFromAppImage()).toBe(false);
-  });
-
-  it('returns false on macOS even when APPIMAGE is set', () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    process.env.APPIMAGE = '/some/path';
-    expect(isRunningFromAppImage()).toBe(false);
-  });
-});
-
-// ─── Linux AppImage guard — initAutoUpdater ───────────────────────────────────
-//
-// On Linux, initAutoUpdater must skip all setup when the app was not launched
-// from its own AppImage (APPIMAGE env var absent).  It must proceed normally
-// when APPIMAGE is set, and on all non-Linux platforms regardless.
-
-describe('initAutoUpdater — Linux AppImage guard', () => {
-  const originalPlatform = process.platform;
-
-  beforeEach(() => {
-    resetUpdaterStateForTesting();
-    mockAutoUpdater.removeAllListeners();
-    mockAutoUpdater.checkForUpdates.mockClear();
-    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
-    delete process.env.APPIMAGE;
-  });
-
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
-    delete process.env.APPIMAGE;
-    mockAutoUpdater.removeAllListeners();
-    resetUpdaterStateForTesting();
-  });
-
-  it('skips checkForUpdates on Linux when not running from AppImage', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    initAutoUpdater(mockWin);
-    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
-  });
-
-  it('skips event listener registration on Linux when not running from AppImage', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    initAutoUpdater(mockWin);
-    // No listeners registered — emitting events should have no effect.
-    expect(mockAutoUpdater.listenerCount('update-downloaded')).toBe(0);
-    expect(mockAutoUpdater.listenerCount('error')).toBe(0);
-  });
-
-  it('runs normally on Linux when APPIMAGE is set', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
-    initAutoUpdater(mockWin);
-    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
-  });
-
-  it('runs normally on Windows regardless of APPIMAGE', () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    initAutoUpdater(mockWin);
-    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
-  });
-
-  it('runs normally on macOS regardless of APPIMAGE', () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    initAutoUpdater(mockWin);
-    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
-  });
-});
-
-// ─── Linux AppImage guard — checkForUpdatesManually ──────────────────────────
-//
-// When an admin triggers "Check for Updates" on Linux outside the AppImage,
-// a helpful dialog must explain the situation rather than silently doing nothing.
-
-describe('checkForUpdatesManually — Linux AppImage guard', () => {
-  const originalPlatform = process.platform;
-
-  beforeEach(() => {
-    resetUpdaterStateForTesting();
-    mockAutoUpdater.removeAllListeners();
-    mockDialog.showMessageBox.mockClear();
-    mockAutoUpdater.checkForUpdates.mockClear();
-    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
-    delete process.env.APPIMAGE;
-    // initAutoUpdater must be called first so the updater is in a valid state.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    initAutoUpdater(mockWin);
-  });
-
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
-    delete process.env.APPIMAGE;
-    mockAutoUpdater.removeAllListeners();
-    resetUpdaterStateForTesting();
-  });
-
-  it('shows an "Updates unavailable" dialog on Linux when not running from AppImage', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    delete process.env.APPIMAGE;
-
-    checkForUpdatesManually(mockWin);
-
-    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
-    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
-    expect(opts.title).toBe('Updates unavailable');
-    expect(opts.detail).toContain('AppImage');
-  });
-
-  it('does NOT call checkForUpdates on Linux outside AppImage', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    delete process.env.APPIMAGE;
-    mockAutoUpdater.checkForUpdates.mockClear();
-
-    checkForUpdatesManually(mockWin);
-
-    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
-  });
-
-  it('proceeds normally on Linux when APPIMAGE is set', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
-    mockAutoUpdater.checkForUpdates.mockClear();
-    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
-
-    checkForUpdatesManually(mockWin);
-
-    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
-  });
-
-  it('proceeds normally on Windows', () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    mockAutoUpdater.checkForUpdates.mockClear();
-    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
-    mockDialog.showMessageBox.mockClear();
-
-    checkForUpdatesManually(mockWin);
-
-    // Should not show the "Updates unavailable" dialog
-    const calls = mockDialog.showMessageBox.mock.calls as [unknown, Electron.MessageBoxOptions][];
-    const unavailableCalls = calls.filter(([, opts]) => opts.title === 'Updates unavailable');
-    expect(unavailableCalls).toHaveLength(0);
-    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
   });
 });

@@ -129,8 +129,9 @@ jobs:
         working-directory: electron-app
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${GIT_TAG}"
           gh release create "${TAG}" --title "${TAG}" --generate-notes 2>/dev/null || true
           gh release upload "${TAG}" \
             dist-installer/*.AppImage \
