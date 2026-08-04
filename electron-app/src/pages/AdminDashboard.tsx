@@ -33,6 +33,7 @@ import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { BackupRestore } from '@/components/backup/BackupRestore';
 import { CsvImport } from '@/components/import/CsvImport';
 import { Location } from '@/lib/store';
+import { exportCsv, exportXlsx, exportPdf, exportTxt } from '@/lib/utils/export';
 
 type ViewMode = 'default' | 'add' | 'modify';
 
@@ -318,8 +319,11 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onSearchChange={setSearchQuery}
         pendingChanges={pendingChangesCount}
         onPublish={handlePublish}
+        onExportCsv={() => exportCsv(state.locations)}
+        onExportXlsx={() => exportXlsx(state.locations)}
+        onExportPdf={() => exportPdf(state.locations)}
+        onExportTxt={() => exportTxt(state.locations)}
         onExportJson={exportData}
-        onExportCsv={exportCsv}
         currentUser={state.currentUser}
         onStartTour={() => {
           setViewMode('default');

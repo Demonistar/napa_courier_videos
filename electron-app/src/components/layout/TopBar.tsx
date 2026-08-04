@@ -22,8 +22,11 @@ interface TopBarProps {
   onSearchChange: (query: string) => void;
   pendingChanges: number;
   onPublish: () => void;
-  onExportJson: () => void;
   onExportCsv: () => void;
+  onExportXlsx: () => void;
+  onExportPdf: () => void;
+  onExportTxt: () => void;
+  onExportJson: () => void;
   currentUser: string;
   onStartTour: () => void;
   onOpenSettings: () => void;
@@ -37,8 +40,11 @@ export function TopBar({
   onSearchChange,
   pendingChanges,
   onPublish,
-  onExportJson,
   onExportCsv,
+  onExportXlsx,
+  onExportPdf,
+  onExportTxt,
+  onExportJson,
   currentUser,
   onStartTour,
   onOpenSettings,
@@ -127,9 +133,21 @@ export function TopBar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onExportXlsx} data-testid="button-export-xlsx">
+              Export as Excel
+              <span className="ml-auto text-xs text-muted-foreground pl-4">.xlsx</span>
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={onExportCsv} data-testid="button-export-csv">
               Export as CSV
-              <span className="ml-auto text-xs text-muted-foreground pl-4">for Excel / Sheets</span>
+              <span className="ml-auto text-xs text-muted-foreground pl-4">.csv</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExportPdf} data-testid="button-export-pdf">
+              Export as PDF
+              <span className="ml-auto text-xs text-muted-foreground pl-4">reference sheet</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExportTxt} data-testid="button-export-txt">
+              Export as Text
+              <span className="ml-auto text-xs text-muted-foreground pl-4">tab-delimited</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onExportJson} data-testid="button-export-json">
