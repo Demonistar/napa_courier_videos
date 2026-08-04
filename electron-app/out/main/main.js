@@ -24,6 +24,8 @@ const WRITE_ERROR_CODES = ["ENOSPC", "EACCES", "EPERM"];
 let _updateDownloaded = false;
 let _manualCheckPending = false;
 let _checkForUpdatesMenuItem = null;
+let _pendingUpdateVersion = null;
+let _checksumFailedVersion = null;
 function isChecksumError(err) {
   const msg = (err?.message ?? "").toLowerCase();
   return msg.includes("sha512") || msg.includes("sha256") || msg.includes("checksum") || msg.includes("hash") || msg.includes("signature") || msg.includes("integrity");
@@ -89,6 +91,8 @@ function checkForUpdatesManually(win) {
   }
   if (_manualCheckPending) return;
   _manualCheckPending = true;
+  _pendingUpdateVersion = null;
+  _checksumFailedVersion = null;
   if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = false;
   electronUpdater.autoUpdater.checkForUpdates().catch((err) => {
     console.error("[auto-updater] manual check promise rejected:", err?.message ?? err);
@@ -102,6 +106,11 @@ function initAutoUpdater(win) {
   }
   electronUpdater.autoUpdater.autoDownload = true;
   electronUpdater.autoUpdater.autoInstallOnAppQuit = true;
+  electronUpdater.autoUpdater.on("update-available", (info) => {
+    _pendingUpdateVersion = info?.version ?? null;
+    _checksumFailedVersion = null;
+    console.log(`[auto-updater] update available: ${_pendingUpdateVersion ?? "unknown"}`);
+  });
   electronUpdater.autoUpdater.on("update-not-available", () => {
     if (_manualCheckPending) {
       _manualCheckPending = false;
@@ -116,7 +125,17 @@ function initAutoUpdater(win) {
   electronUpdater.autoUpdater.on("download-progress", (info) => {
     win.webContents.send("app:downloadProgress", info);
   });
-  electronUpdater.autoUpdater.on("update-downloaded", () => {
+  electronUpdater.autoUpdater.on("update-downloaded", (info) => {
+    const incomingVersion = info?.version ?? null;
+    if (_checksumFailedVersion !== null && _checksumFailedVersion === incomingVersion) {
+      console.warn(
+        `[auto-updater] update-downloaded for v${incomingVersion} rejected — this version previously failed a checksum check. Use "Check for Updates…" to start a fresh attempt.`
+      );
+      _manualCheckPending = false;
+      if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
+      win.webContents.send("app:updateCancelled");
+      return;
+    }
     _updateDownloaded = true;
     _manualCheckPending = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
@@ -127,6 +146,12 @@ function initAutoUpdater(win) {
     const wasManual = _manualCheckPending;
     _manualCheckPending = false;
     _updateDownloaded = false;
+    if (isChecksumError(err)) {
+      _checksumFailedVersion = _pendingUpdateVersion;
+      console.warn(
+        `[auto-updater] checksum failure for v${_checksumFailedVersion ?? "unknown"} — quarantined; automatic retries of this version will be rejected.`
+      );
+    }
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error("[auto-updater] error:", err?.message ?? err);
     win.webContents.send("app:updateCancelled");
