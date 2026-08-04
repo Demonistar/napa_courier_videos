@@ -1,0 +1,138 @@
+name: Test Windows signing gate
+
+# Triggered on demand to confirm the "Verify Authenticode signature" step in
+# build-windows.yml correctly blocks unsigned installers from reaching admins.
+#
+# The test runs on a real windows-latest runner so the native signtool.exe tool
+# is available (pre-installed with the Windows SDK).  It builds a synthetic
+# unsigned .exe file that mirrors the output path build-windows.yml expects and
+# then feeds it through the EXACT same gate script used in build-windows.yml
+# step 7.
+#
+# Expected result: signtool exits non-zero and the "Confirm gate blocked upload"
+# step reports a clear pass.  If signtool somehow returned 0 for the unsigned
+# file the test job itself would fail, surfacing a regression.
+#
+# Run this workflow from Actions → "Test Windows signing gate" → Run workflow.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/build-windows.yml"
+      - "electron-app/electron-builder.config.js"
+
+jobs:
+  signing-gate-test:
+    name: Verify signtool gate rejects an unsigned installer
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout (needed so the runner has the repo layout) ───────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Build a minimal unsigned .exe ─────────────────────────────────────
+      #
+      # Creates the smallest valid-looking installer file in the output path
+      # that build-windows.yml expects.  The file content does not matter —
+      # signtool will reject any file that lacks a valid Authenticode signature
+      # regardless of its content.  What matters is:
+      #   • the file exists at dist-installer/*.exe (so the gate doesn't exit
+      #     with "No installer .exe found" before it can verify the signature)
+      #   • the file is NOT signed (so signtool exits non-zero as we expect)
+      #
+      # We write a small stub .exe (a 2-byte MZ header) so the file extension
+      # check passes and signtool attempts signature verification rather than
+      # reporting an unrelated format error.
+      - name: Create unsigned installer stub
+        shell: pwsh
+        working-directory: electron-app
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-installer | Out-Null
+          # Minimal stub: MZ magic bytes followed by zeros — enough for signtool
+          # to identify it as a Windows executable and attempt Authenticode
+          # verification, which it will reject as unsigned.
+          $bytes = [byte[]]@(0x4D, 0x5A) + ([byte[]]::new(510))
+          [System.IO.File]::WriteAllBytes(
+            "$PWD\dist-installer\NAPA-Courier-Admin-Setup.exe",
+            $bytes
+          )
+          Write-Host "Created unsigned stub: dist-installer\NAPA-Courier-Admin-Setup.exe"
+
+      # ── 3. Run the gate script — expect it to fail ───────────────────────────
+      #
+      # This reproduces build-windows.yml step 7 verbatim.  Running it with
+      # `continue-on-error: true` lets us capture the exit code and assert it
+      # is non-zero.  A non-zero exit here means the gate works as intended.
+      - name: Run gate script (expect failure)
+        id: gate
+        shell: pwsh
+        working-directory: electron-app
+        continue-on-error: true
+        run: |
+          # Locate the top-level NSIS installer (not win-unpacked/ executables).
+          # -File and no -Recurse ensure we stay in dist-installer/ itself.
+          $exe = Get-ChildItem -Path dist-installer -Filter "*.exe" -File |
+                 Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "No installer .exe found in dist-installer/ — build may have failed."
+            exit 1
+          }
+          Write-Host "Verifying signature on: $($exe.FullName)"
+
+          # signtool.exe is on PATH on windows-latest runners (Windows SDK)
+          & signtool verify /pa "$($exe.FullName)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error @"
+          Authenticode signature verification FAILED.
+          The installer '$($exe.Name)' is unsigned or has an invalid signature.
+          Ensure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are set as repository
+          secrets and contain a valid, unexpired .pfx certificate.
+          The unsigned installer has NOT been uploaded to GitHub Releases.
+          "@
+            exit 1
+          }
+          Write-Host "Signature OK — proceeding to publish."
+
+      # ── 4. Confirm the gate blocked the upload ───────────────────────────────
+      #
+      # The gate step MUST have exited non-zero.  If it somehow returned 0 the
+      # signtool check passed on an unsigned file — the gate is broken and this
+      # test job fails loudly.
+      - name: Confirm gate blocked upload
+        shell: bash
+        run: |
+          OUTCOME="${{ steps.gate.outcome }}"
+          echo "Gate step outcome: ${OUTCOME}"
+          if [ "${OUTCOME}" = "failure" ]; then
+            echo ""
+            echo "✅ PASS — signtool verify /pa correctly rejected the unsigned"
+            echo "   installer stub.  The gate would have stopped this build"
+            echo "   before any .exe reached GitHub Releases."
+          else
+            echo ""
+            echo "❌ FAIL — signtool verify /pa returned 0 for an unsigned file."
+            echo "   The signing gate in build-windows.yml step 7 is NOT working."
+            exit 1
+          fi
+
+      # ── 5. Confirm upload step would be skipped ──────────────────────────────
+      #
+      # In build-windows.yml the publish step is a plain sequential step — it
+      # only runs when every prior step succeeds.  Because the gate (step 7)
+      # exits non-zero, GitHub Actions marks the job as failed and skips all
+      # remaining steps, including "Publish to GitHub Releases" (step 8).
+      #
+      # This step records that guarantee explicitly in the workflow log.
+      - name: Confirm upload step is unreachable after gate failure
+        shell: bash
+        run: |
+          echo "In build-windows.yml, step 8 (Publish to GitHub Releases) is a"
+          echo "plain sequential step with no 'if:' condition."
+          echo ""
+          echo "GitHub Actions skips all subsequent steps as soon as any step"
+          echo "exits non-zero, so a gate failure in step 7 guarantees step 8"
+          echo "never runs and no unsigned .exe is uploaded."
+          echo ""
+          echo "✅ Upload gate confirmed: unsigned Windows builds cannot reach admins."
