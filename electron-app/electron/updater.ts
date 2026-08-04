@@ -60,6 +60,16 @@ export function isChecksumError(err: Error): boolean {
 }
 
 /**
+ * Returns true when the error is a local write failure (disk full, permission
+ * denied).  These can leave partial files in the pending cache that must be
+ * wiped the same way a checksum failure would be.
+ */
+export function isWriteError(err: Error): boolean {
+  const code = ((err as Error & { code?: string }).code) ?? '';
+  return code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM';
+}
+
+/**
  * Delete the electron-updater "pending" download cache so a corrupt or
  * partially-written file cannot cause an infinite retry loop on the next
  * update check.
@@ -78,7 +88,7 @@ function clearUpdateCache(): void {
     );
     if (fs.existsSync(pendingDir)) {
       fs.rmSync(pendingDir, { recursive: true, force: true });
-      console.log('[auto-updater] cleared pending cache after checksum failure:', pendingDir);
+      console.log('[auto-updater] cleared pending cache:', pendingDir);
     }
   } catch (e) {
     // Non-fatal — log and continue.  A leftover file is annoying but the
@@ -203,10 +213,11 @@ export function initAutoUpdater(win: BrowserWindow): void {
     // Tell the renderer to dismiss the in-app update badge.
     win.webContents.send('app:updateCancelled');
 
-    // Wipe the pending download cache on checksum/hash/integrity errors so
-    // the corrupt file is not retried on the next update check, preventing
-    // an infinite re-download loop.
-    if (isChecksumError(err as Error)) {
+    // Wipe the pending download cache when the error could leave a corrupt or
+    // partial file on disk — checksum/hash failures and write errors (ENOSPC,
+    // EACCES, EPERM).  This prevents an infinite re-download loop where
+    // electron-updater retries against the same bad cached file.
+    if (isChecksumError(err as Error) || isWriteError(err as Error)) {
       clearUpdateCache();
     }
 

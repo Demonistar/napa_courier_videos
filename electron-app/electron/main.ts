@@ -622,7 +622,12 @@ function registerIpcHandlers() {
   }));
 
   ipcMain.handle('app:quitAndInstall', () => {
-    if (getUpdateDownloaded()) autoUpdater.quitAndInstall();
+    if (getUpdateDownloaded()) {
+      // Dismiss the update badge in the renderer before we disappear so the
+      // notice doesn't linger if the restart is delayed by OS dialogs.
+      BrowserWindow.getAllWindows()[0]?.webContents.send('app:updateCancelled');
+      autoUpdater.quitAndInstall();
+    }
   });
 
   /** Returns the OS platform and, on macOS, the resolved .app bundle path. */

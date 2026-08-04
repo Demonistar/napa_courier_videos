@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'node:path';
 
 // ─── Hoisted mock objects ─────────────────────────────────────────────────────
 // vi.mock factories are hoisted to the top of the file, so any variables they
@@ -15,7 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // We use require() inside vi.hoisted so Node built-ins are available before any
 // ESM imports are initialized.
 
-const { mockAutoUpdater, mockDialog, mockApp } = vi.hoisted(() => {
+const { mockAutoUpdater, mockDialog, mockApp, mockFs } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require('node:events') as typeof import('node:events');
   const emitter = new EventEmitter();
@@ -33,9 +34,16 @@ const { mockAutoUpdater, mockDialog, mockApp } = vi.hoisted(() => {
   const mockApp = {
     isPackaged: true,
     getVersion: vi.fn().mockReturnValue('1.2.3'),
+    getPath: vi.fn().mockReturnValue('/fake/userData'),
+    getName: vi.fn().mockReturnValue('NAPA Courier Admin'),
   };
 
-  return { mockAutoUpdater, mockDialog, mockApp };
+  const mockFs = {
+    existsSync: vi.fn().mockReturnValue(true),
+    rmSync: vi.fn(),
+  };
+
+  return { mockAutoUpdater, mockDialog, mockApp, mockFs };
 });
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
@@ -49,11 +57,15 @@ vi.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
+vi.mock('node:fs', () => ({ default: mockFs }));
+
 // ─── Subject under test ───────────────────────────────────────────────────────
 
 import {
   isNetworkError,
   NETWORK_ERROR_CODES,
+  isChecksumError,
+  isWriteError,
   initAutoUpdater,
   checkForUpdatesManually,
   setCheckForUpdatesMenuItem,
@@ -452,5 +464,167 @@ describe('initAutoUpdater — error clears _updateDownloaded and sends app:updat
     mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com'));
 
     expect(mockWebContents.send).toHaveBeenCalledWith('app:updateCancelled');
+  });
+});
+
+// ─── isChecksumError ──────────────────────────────────────────────────────────
+
+describe('isChecksumError', () => {
+  it('returns true when the message contains "sha512"', () => {
+    expect(isChecksumError(makeError('sha512 mismatch for update.exe'))).toBe(true);
+  });
+
+  it('returns true when the message contains "sha256"', () => {
+    expect(isChecksumError(makeError('sha256 verification failed'))).toBe(true);
+  });
+
+  it('returns true when the message contains "checksum"', () => {
+    expect(isChecksumError(makeError('checksum mismatch for file: update.exe'))).toBe(true);
+  });
+
+  it('returns true when the message contains "hash"', () => {
+    expect(isChecksumError(makeError('hash does not match expected value'))).toBe(true);
+  });
+
+  it('returns true when the message contains "integrity"', () => {
+    expect(isChecksumError(makeError('integrity check failed'))).toBe(true);
+  });
+
+  it('returns true when the message contains "signature"', () => {
+    expect(isChecksumError(makeError('signature verification failed'))).toBe(true);
+  });
+
+  it('returns false for a network error', () => {
+    expect(isChecksumError(makeError('getaddrinfo ENOTFOUND update.example.com'))).toBe(false);
+  });
+
+  it('returns false for a disk-full error', () => {
+    expect(isChecksumError(makeError('ENOSPC: no space left on device', 'ENOSPC'))).toBe(false);
+  });
+
+  it('returns false for a permission error', () => {
+    expect(isChecksumError(makeError('EACCES: permission denied', 'EACCES'))).toBe(false);
+  });
+
+  it('is case-insensitive', () => {
+    expect(isChecksumError(makeError('SHA512 MISMATCH'))).toBe(true);
+  });
+});
+
+// ─── isWriteError ─────────────────────────────────────────────────────────────
+
+describe('isWriteError', () => {
+  it('returns true for ENOSPC', () => {
+    expect(isWriteError(makeError('no space left on device', 'ENOSPC'))).toBe(true);
+  });
+
+  it('returns true for EACCES', () => {
+    expect(isWriteError(makeError('permission denied', 'EACCES'))).toBe(true);
+  });
+
+  it('returns true for EPERM', () => {
+    expect(isWriteError(makeError('operation not permitted', 'EPERM'))).toBe(true);
+  });
+
+  it('returns false for a network error code', () => {
+    expect(isWriteError(makeError('ENOTFOUND github.com', 'ENOTFOUND'))).toBe(false);
+  });
+
+  it('returns false for a checksum error (no error code)', () => {
+    expect(isWriteError(makeError('checksum mismatch for file: update.exe'))).toBe(false);
+  });
+
+  it('returns false when there is no error code at all', () => {
+    expect(isWriteError(makeError('something went wrong'))).toBe(false);
+  });
+});
+
+// ─── Update-cache cleanup ─────────────────────────────────────────────────────
+//
+// When a download fails due to a bad checksum or a write error, the pending
+// cache directory must be wiped so electron-updater does not retry against the
+// same corrupt or partial file on the next check.
+
+describe('initAutoUpdater — update-cache cleanup on download failure', () => {
+  const expectedPendingDir = path.join(
+    '/fake/userData',
+    '..',
+    'NAPA Courier Admin-updater',
+    'pending',
+  );
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockFs.existsSync.mockClear();
+    mockFs.rmSync.mockClear();
+    mockFs.existsSync.mockReturnValue(true);
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('wipes the pending cache when a checksum mismatch error fires', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
+  });
+
+  it('wipes the pending cache when a sha512 error fires', () => {
+    mockAutoUpdater.emit('error', makeError('sha512 hash mismatch'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
+  });
+
+  it('wipes the pending cache when the disk is full (ENOSPC)', () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
+  });
+
+  it('wipes the pending cache when writing is denied (EACCES)', () => {
+    mockAutoUpdater.emit('error', makeError('EACCES: permission denied', 'EACCES'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
+  });
+
+  it('wipes the pending cache when writing is denied (EPERM)', () => {
+    mockAutoUpdater.emit('error', makeError('EPERM: operation not permitted', 'EPERM'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(expectedPendingDir, { recursive: true, force: true });
+  });
+
+  it('does NOT wipe the cache for a plain network error (ENOTFOUND)', () => {
+    mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com', 'ENOTFOUND'));
+
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('does NOT wipe the cache for a mid-transfer reset (ECONNRESET)', () => {
+    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
+
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('skips rmSync when the pending directory does not exist', () => {
+    mockFs.existsSync.mockReturnValue(false);
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    expect(mockFs.existsSync).toHaveBeenCalledWith(expectedPendingDir);
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when rmSync fails (non-fatal)', () => {
+    mockFs.rmSync.mockImplementation(() => { throw new Error('EPERM rmSync failed'); });
+
+    expect(() => {
+      mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    }).not.toThrow();
   });
 });
