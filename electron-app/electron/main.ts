@@ -937,6 +937,112 @@ function registerIpcHandlers() {
   );
 
   /**
+   * Scan a Dropbox folder and return a public shareable link for every file in
+   * it.  Existing shared links are reused; new ones are created only when none
+   * exist.  Files are processed five at a time to keep latency reasonable for
+   * large folders (100 + files).
+   */
+  ipcMain.handle('dropbox:generateLinks', async (_event, folderPath: string) => {
+    interface FileEntry { name: string; path_lower: string; path_display: string }
+    interface LinkResult {
+      name: string; path: string; url: string; reused: boolean; error?: string;
+    }
+
+    try {
+      // ── Step 1: collect all files in the folder (paginated) ──────────────
+      const files: FileEntry[] = [];
+      type ListData = {
+        entries: Array<{ '.tag': string; name: string; path_lower: string; path_display: string }>;
+        cursor: string; has_more: boolean;
+      };
+
+      let resp = await dbxApi('/files/list_folder', { path: folderPath, recursive: false, limit: 2000 });
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => String(resp.status));
+        return { ok: false, error: `Could not list folder: ${msg}` };
+      }
+      let page = await resp.json() as ListData;
+      for (const e of page.entries) {
+        if (e['.tag'] === 'file') files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+      }
+      while (page.has_more) {
+        resp = await dbxApi('/files/list_folder/continue', { cursor: page.cursor });
+        if (!resp.ok) break;
+        page = await resp.json() as ListData;
+        for (const e of page.entries) {
+          if (e['.tag'] === 'file') files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+        }
+      }
+
+      if (files.length === 0) return { ok: true, files: 0, results: [] };
+
+      // ── Step 2: get or create shared link for a single file ───────────────
+      const getOrCreate = async (file: FileEntry): Promise<LinkResult> => {
+        try {
+          // Check for an existing direct link first
+          const listResp = await dbxApi('/sharing/list_shared_links', {
+            path: file.path_lower, direct_only: true,
+          });
+          if (listResp.ok) {
+            const listData = await listResp.json() as { links: Array<{ url: string }> };
+            if (listData.links?.length > 0) {
+              return { name: file.name, path: file.path_display, url: listData.links[0].url, reused: true };
+            }
+          }
+
+          // Create a new public link
+          const createResp = await dbxApi('/sharing/create_shared_link_with_settings', {
+            path: file.path_lower,
+            settings: { requested_visibility: 'public' },
+          });
+
+          if (createResp.ok) {
+            const cd = await createResp.json() as { url: string };
+            return { name: file.name, path: file.path_display, url: cd.url, reused: false };
+          }
+
+          if (createResp.status === 409) {
+            // The link already exists — Dropbox returns it in the error body
+            const ed = await createResp.json() as {
+              error?: { '.tag': string; metadata?: { url?: string } };
+            };
+            if (ed?.error?.['.tag'] === 'shared_link_already_exists') {
+              const existingUrl = ed.error!.metadata?.url;
+              if (existingUrl) return { name: file.name, path: file.path_display, url: existingUrl, reused: true };
+              // Rare: metadata missing — list again
+              const fl = await dbxApi('/sharing/list_shared_links', { path: file.path_lower });
+              if (fl.ok) {
+                const fd = await fl.json() as { links: Array<{ url: string }> };
+                const url = fd.links?.[0]?.url ?? '';
+                return { name: file.name, path: file.path_display, url, reused: true };
+              }
+            }
+          }
+
+          return { name: file.name, path: file.path_display, url: '', reused: false,
+            error: `HTTP ${createResp.status}` };
+        } catch (err: unknown) {
+          return { name: file.name, path: file.path_display, url: '', reused: false,
+            error: (err as Error).message };
+        }
+      };
+
+      // ── Step 3: process in batches of 5 ──────────────────────────────────
+      const results: LinkResult[] = [];
+      const BATCH = 5;
+      for (let i = 0; i < files.length; i += BATCH) {
+        const batch = files.slice(i, i + BATCH);
+        const batchResults = await Promise.all(batch.map(getOrCreate));
+        results.push(...batchResults);
+      }
+
+      return { ok: true, files: files.length, results };
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  /**
    * Download an image from NAPA Admin Data/<relativePath> and return it as a
    * base64 data URI suitable for use in an <img src="…"> tag.
    */

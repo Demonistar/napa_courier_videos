@@ -140,6 +140,17 @@ const api = {
     }> => ipcRenderer.invoke('dropbox:testFolderPath', path),
 
     /**
+     * Scan a Dropbox folder and return a public shareable link for every file.
+     * Existing links are reused; new ones created only when none exist.
+     */
+    generateLinks: (folderPath: string): Promise<{
+      ok: boolean;
+      files?: number;
+      results?: Array<{ name: string; path: string; url: string; reused: boolean; error?: string }>;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:generateLinks', folderPath),
+
+    /**
      * Upload an image file into NAPA Admin Data/images/ and return the
      * relative path "images/<filename>" to store in the location record.
      */

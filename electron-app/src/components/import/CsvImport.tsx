@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Upload, AlertTriangle, CheckCircle2, SkipForward, ChevronRight, FileText, X, Download } from 'lucide-react';
 import {
@@ -46,6 +46,13 @@ interface CsvImportProps {
     rows: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>[],
     source: string,
   ) => void;
+  /**
+   * When provided the wizard opens directly at the column-mapping step
+   * pre-seeded with this data (e.g. from the "Generate Links" feature).
+   * Auto-mapping runs automatically so headers named 'Site Name',
+   * 'Account Number', 'Video URL' map without any admin interaction.
+   */
+  seedData?: { headers: string[]; rows: Record<string, string>[] };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -554,13 +561,25 @@ function PreviewStep({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function CsvImport({ open, onOpenChange, existingLocations, onImport }: CsvImportProps) {
+export function CsvImport({ open, onOpenChange, existingLocations, onImport, seedData }: CsvImportProps) {
   const [step, setStep] = useState<Step>('upload');
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([]);
   const [columnMap, setColumnMap] = useState<ColumnMap>({} as ColumnMap);
   const [previewRows, setPreviewRows] = useState<RowPreview[]>([]);
   const [fileName, setFileName] = useState('');
+
+  // When the wizard opens with pre-seeded data (e.g. from Generate Links),
+  // jump straight to the column-mapping step.
+  useEffect(() => {
+    if (open && seedData) {
+      setCsvHeaders(seedData.headers);
+      setCsvRows(seedData.rows);
+      setColumnMap(autoMapColumns(seedData.headers) as ColumnMap);
+      setFileName('__generated_links__');
+      setStep('map');
+    }
+  }, [open]);
 
   const reset = () => {
     setStep('upload');
@@ -616,7 +635,9 @@ export function CsvImport({ open, onOpenChange, existingLocations, onImport }: C
       .filter((r) => !r.skip && r.mapped !== null)
       .map((r) => r.mapped!);
 
-    const source = /\.(xlsx|xls)$/i.test(fileName) ? 'Excel import' : 'CSV import';
+    const source = /\.(xlsx|xls)$/i.test(fileName) ? 'Excel import'
+                 : fileName === '__generated_links__'    ? 'Dropbox link generator'
+                 : 'CSV import';
     onImport(toImport, source);
     onOpenChange(false);
     reset();

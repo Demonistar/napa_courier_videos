@@ -32,6 +32,7 @@ import { useDropboxUser } from '@/hooks/use-dropbox-user';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { BackupRestore } from '@/components/backup/BackupRestore';
 import { CsvImport } from '@/components/import/CsvImport';
+import { GenerateLinksDialog } from '@/components/links/GenerateLinksDialog';
 import { Location } from '@/lib/store';
 import { exportCsv, exportXlsx, exportPdf, exportTxt } from '@/lib/utils/export';
 
@@ -87,6 +88,8 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const [updateReady, setUpdateReady] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [importSeedData, setImportSeedData] = useState<{ headers: string[]; rows: Record<string, string>[] } | undefined>(undefined);
+  const [generateLinksOpen, setGenerateLinksOpen] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
 
@@ -332,7 +335,8 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         }}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenBackup={() => setBackupOpen(true)}
-        onOpenImport={() => setImportOpen(true)}
+        onOpenImport={() => { setImportSeedData(undefined); setImportOpen(true); }}
+        onOpenGenerateLinks={() => setGenerateLinksOpen(true)}
         dropboxUser={dropboxUser}
         updateReady={updateReady}
       />
@@ -526,12 +530,24 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onRestoreFull={handleRestoreFull}
       />
 
-      {/* CSV Import */}
+      {/* Generate Links from Dropbox folder */}
+      <GenerateLinksDialog
+        open={generateLinksOpen}
+        onOpenChange={setGenerateLinksOpen}
+        onSendToImport={(headers, rows) => {
+          setImportSeedData({ headers, rows });
+          setGenerateLinksOpen(false);
+          setImportOpen(true);
+        }}
+      />
+
+      {/* CSV / XLSX / Generated-links Import */}
       <CsvImport
         open={importOpen}
         onOpenChange={setImportOpen}
         existingLocations={state.locations}
         onImport={handleImportLocations}
+        seedData={importSeedData}
       />
 
       {/* Tour */}
