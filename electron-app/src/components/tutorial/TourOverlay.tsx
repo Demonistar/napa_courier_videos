@@ -1,157 +1,170 @@
-import { useEffect, useState, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { X, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-
-export interface TourStep {
-  target: string; // data-tour-id
-  title: string;
-  description: string;
-}
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { TourStepDef } from './useTour';
 
 interface TourOverlayProps {
-  steps: TourStep[];
-  onComplete: () => void;
+  step: TourStepDef;
+  stepIndex: number;
+  totalSteps: number;
+  /** Whether the Next button should be enabled (ignored for autoAdvance steps). */
+  canAdvance: boolean;
+  onNext: () => void;
+  onExit: () => void;
 }
 
-export function TourOverlay({ steps, onComplete }: TourOverlayProps) {
-  const [currentStep, setCurrentStep] = useState(0);
-  const [position, setPosition] = useState({ top: 0, left: 0, width: 0, height: 0 });
-  const tooltipRef = useRef<HTMLDivElement>(null);
+interface Rect { top: number; left: number; width: number; height: number }
+
+const PADDING = 6;   // px around highlight box
+const CARD_W  = 360; // px — tooltip card width
+
+export function TourOverlay({ step, stepIndex, totalSteps, canAdvance, onNext, onExit }: TourOverlayProps) {
+  const [rect, setRect] = useState<Rect>({ top: 0, left: 0, width: 0, height: 0 });
+
+  const measureTarget = useCallback(() => {
+    const el = document.querySelector(`[data-tour-id="${step.id}"]`);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [step.id]);
 
   useEffect(() => {
-    const updatePosition = () => {
-      const step = steps[currentStep];
-      const element = document.querySelector(`[data-tour-id="${step.target}"]`);
-
-      if (element) {
-        const rect = element.getBoundingClientRect();
-        setPosition({
-          top: rect.top,
-          left: rect.left,
-          width: rect.width,
-          height: rect.height,
-        });
-      }
+    measureTarget();
+    const id = setInterval(measureTarget, 200); // keep in sync with layout shifts
+    window.addEventListener('resize', measureTarget);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('resize', measureTarget);
     };
+  }, [measureTarget]);
 
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    return () => window.removeEventListener('resize', updatePosition);
-  }, [currentStep, steps]);
+  const hTop  = rect.top  - PADDING;
+  const hLeft = rect.left - PADDING;
+  const hW    = rect.width  + PADDING * 2;
+  const hH    = rect.height + PADDING * 2;
 
-  const handleNext = () => {
-    if (currentStep < steps.length - 1) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      onComplete();
-    }
-  };
+  // Place card below the target; if that would overflow, place above.
+  const spaceBelow = window.innerHeight - (rect.top + rect.height);
+  const cardTop = spaceBelow > 200
+    ? rect.top + rect.height + PADDING + 8
+    : rect.top - PADDING - 8 - 180; // approx card height
 
-  const handlePrev = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
-    }
-  };
+  const cardLeft = Math.max(12, Math.min(rect.left, window.innerWidth - CARD_W - 12));
 
-  const step = steps[currentStep];
-  const tooltipTop = position.top + position.height + 16;
-  const tooltipLeft = Math.max(16, Math.min(position.left, window.innerWidth - 400));
+  const isLast = stepIndex === totalSteps - 1;
 
   return (
     <>
-      {/* Overlay with cutout */}
+      {/* ── Dimmed overlay (4 rects around the cutout) ────────────────── */}
+      {/* Top band */}
       <div
-        className="fixed inset-0 z-[9998] pointer-events-none"
+        className="fixed z-[9998] bg-black/60 pointer-events-none"
+        style={{ top: 0, left: 0, right: 0, height: Math.max(0, hTop) }}
+      />
+      {/* Bottom band */}
+      <div
+        className="fixed z-[9998] bg-black/60 pointer-events-none"
+        style={{ top: hTop + hH, left: 0, right: 0, bottom: 0 }}
+      />
+      {/* Left band */}
+      <div
+        className="fixed z-[9998] bg-black/60 pointer-events-none"
+        style={{ top: hTop, left: 0, width: Math.max(0, hLeft), height: hH }}
+      />
+      {/* Right band */}
+      <div
+        className="fixed z-[9998] bg-black/60 pointer-events-none"
+        style={{ top: hTop, left: hLeft + hW, right: 0, height: hH }}
+      />
+
+      {/* ── Highlight ring ─────────────────────────────────────────────── */}
+      <div
+        className="fixed z-[9999] rounded-lg pointer-events-none transition-all duration-200"
         style={{
-          background: `
-            linear-gradient(to right, 
-              rgba(0, 0, 0, 0.6) 0%, 
-              rgba(0, 0, 0, 0.6) ${position.left}px, 
-              transparent ${position.left}px, 
-              transparent ${position.left + position.width}px, 
-              rgba(0, 0, 0, 0.6) ${position.left + position.width}px, 
-              rgba(0, 0, 0, 0.6) 100%),
-            linear-gradient(to bottom, 
-              rgba(0, 0, 0, 0.6) 0%, 
-              rgba(0, 0, 0, 0.6) ${position.top}px, 
-              transparent ${position.top}px, 
-              transparent ${position.top + position.height}px, 
-              rgba(0, 0, 0, 0.6) ${position.top + position.height}px, 
-              rgba(0, 0, 0, 0.6) 100%)
-          `,
+          top: hTop,
+          left: hLeft,
+          width: hW,
+          height: hH,
+          boxShadow: '0 0 0 2px hsl(var(--primary)), 0 0 0 4px hsl(var(--primary) / 0.3)',
         }}
       />
 
-      {/* Highlight box */}
-      <div
-        className="fixed z-[9999] border-2 border-primary rounded-lg pointer-events-none transition-all duration-300"
-        style={{
-          top: position.top - 4,
-          left: position.left - 4,
-          width: position.width + 8,
-          height: position.height + 8,
-        }}
-      />
+      {/* ── Pulse ring (autoAdvance = user must click the element) ──────── */}
+      {step.autoAdvance && (
+        <div
+          className="fixed z-[9999] rounded-lg pointer-events-none animate-ping"
+          style={{
+            top: hTop,
+            left: hLeft,
+            width: hW,
+            height: hH,
+            boxShadow: '0 0 0 3px hsl(var(--primary) / 0.5)',
+          }}
+        />
+      )}
 
-      {/* Tooltip */}
+      {/* ── Tooltip card ───────────────────────────────────────────────── */}
       <Card
-        ref={tooltipRef}
-        className="fixed z-[10000] w-96 shadow-2xl"
-        style={{
-          top: tooltipTop,
-          left: tooltipLeft,
-        }}
+        className="fixed z-[10000] shadow-2xl"
+        style={{ top: cardTop, left: cardLeft, width: CARD_W }}
       >
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-2 pt-4 px-4">
           <div className="flex items-start justify-between gap-2">
-            <div className="flex-1">
-              <CardTitle className="text-lg">{step.title}</CardTitle>
-              <CardDescription className="text-xs mt-1">
-                Step {currentStep + 1} of {steps.length}
-              </CardDescription>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-0.5">
+                Step {stepIndex + 1} of {totalSteps}
+              </p>
+              <CardTitle className="text-sm leading-snug">{step.title}</CardTitle>
             </div>
+
+            {/* ── EXIT TOUR — always visible ──────────────────────────── */}
             <Button
               variant="ghost"
-              size="icon"
-              className="h-6 w-6 -mt-1 -mr-1"
-              onClick={onComplete}
-              data-testid="button-tour-close"
+              size="sm"
+              onClick={onExit}
+              className="shrink-0 h-7 px-2 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 gap-1"
+              data-testid="button-tour-exit"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3 h-3" />
+              Exit Tour
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-foreground">{step.description}</p>
 
-          <div className="flex items-center justify-between gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handlePrev}
-              disabled={currentStep === 0}
-              data-testid="button-tour-prev"
-            >
-              <ChevronLeft className="w-4 h-4 mr-1" />
-              Previous
-            </Button>
+        <CardContent className="px-4 pb-4 space-y-3">
+          <p className="text-sm text-foreground leading-relaxed">{step.description}</p>
 
-            <Button variant="ghost" size="sm" onClick={onComplete} data-testid="button-tour-skip">
-              Skip Tour
-            </Button>
-
-            <Button onClick={handleNext} size="sm" data-testid="button-tour-next">
-              {currentStep < steps.length - 1 ? (
-                <>
-                  Next
-                  <ChevronRight className="w-4 h-4 ml-1" />
-                </>
-              ) : (
-                'Finish'
+          {step.autoAdvance ? (
+            /* autoAdvance steps: tell the user to interact — no Next button */
+            <p className="text-xs text-muted-foreground italic">
+              👆 Perform the action above to continue automatically.
+            </p>
+          ) : (
+            /* Manual steps: Next/Done button, disabled until canAdvance */
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={onNext}
+                disabled={!canAdvance}
+                className="gap-1.5"
+                data-testid="button-tour-next"
+              >
+                {step.nextLabel ?? (
+                  <>
+                    Next
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </Button>
+              {!canAdvance && !isLast && (
+                <p className="text-[10px] text-muted-foreground self-center ml-2">
+                  Fill in the field above first
+                </p>
               )}
-            </Button>
-          </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </>

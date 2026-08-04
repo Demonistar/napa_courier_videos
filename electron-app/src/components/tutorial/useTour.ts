@@ -1,48 +1,104 @@
 import { useState } from 'react';
-import { TourStep } from './TourOverlay';
 
-export const tourSteps: TourStep[] = [
+export interface TourStepDef {
+  /** Matches the data-tour-id of the element to highlight. */
+  id: string;
+  title: string;
+  description: string;
+  /**
+   * If true, the overlay shows no Next button — progression is triggered
+   * automatically when the user performs the real UI action (clicking a button,
+   * submitting the form, etc.).  The dashboard wires this via advanceTour().
+   */
+  autoAdvance?: boolean;
+  /** Label override for the Next/confirm button. Defaults to 'Next →'. */
+  nextLabel?: string;
+}
+
+/** Ordered list of every step in the Add-Location guided tour. */
+export const TOUR_STEPS: TourStepDef[] = [
   {
-    target: 'location-tree',
-    title: 'Location Tree',
+    id: 'add-button',
+    autoAdvance: true,
+    title: 'Step 1 — Add a Location',
     description:
-      'This is the Location Tree. Browse delivery locations organized by state and city. Click any site to view its details.',
+      'Click the "Add New Location" button (highlighted) to open the new location form.',
   },
   {
-    target: 'detail-panel',
-    title: 'Detail Panel',
+    id: 'field-state',
+    title: 'Step 2 — Select a State',
     description:
-      'This panel shows full details for the selected location including address, images, video links, delivery instructions, and modification history.',
+      'Choose the state for this location from the dropdown. Once a state is selected, "Next" will become active.',
   },
   {
-    target: 'action-bar',
-    title: 'Action Controls',
+    id: 'field-city',
+    title: 'Step 3 — Select a City',
     description:
-      'Use these buttons to add new locations, modify existing ones, or delete locations. Forms appear inline when you click Add or Modify.',
+      'Choose or type the city. Once a city is entered, "Next" will become active.',
   },
   {
-    target: 'input-search',
-    title: 'Global Search',
+    id: 'field-site-name',
+    title: 'Step 4 — Site Name',
     description:
-      'Use search to find any location instantly by site name, city, state, or address. The tree filters automatically as you type.',
+      'Type the name of the delivery site (e.g. "Sheriff\'s Office"). Click Next when done.',
   },
   {
-    target: 'button-publish',
-    title: 'Publish Changes',
+    id: 'field-address',
+    title: 'Step 5 — Address',
     description:
-      'Changes are saved to a staging layer. When you\'re ready, click "Publish to Live" to push all changes live for drivers to see.',
+      'Type the full street address. Click Next when done.',
+  },
+  {
+    id: 'form-actions',
+    autoAdvance: true,
+    title: 'Step 6 — Save or Cancel',
+    description:
+      'Click "Create Location" to add the location, or "Cancel" to discard it. The tour will continue either way.',
+  },
+  {
+    id: 'new-location',
+    nextLabel: 'Done ✓',
+    title: 'Tour Complete!',
+    description:
+      'Your new location now appears here in the tree. Click "Done" to finish the tour.',
   },
 ];
 
 export function useTour() {
   const [isTourActive, setIsTourActive] = useState(false);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
+  const [tourNewLocationId, setTourNewLocationId] = useState<string | null>(null);
 
-  const startTour = () => setIsTourActive(true);
-  const endTour = () => setIsTourActive(false);
+  const startTour = () => {
+    setTourStepIndex(0);
+    setTourNewLocationId(null);
+    setIsTourActive(true);
+  };
+
+  const exitTour = () => {
+    setIsTourActive(false);
+    setTourStepIndex(0);
+    setTourNewLocationId(null);
+  };
+
+  const advanceTour = () => {
+    const next = tourStepIndex + 1;
+    if (next >= TOUR_STEPS.length) {
+      exitTour();
+    } else {
+      setTourStepIndex(next);
+    }
+  };
 
   return {
     isTourActive,
+    tourStepIndex,
     startTour,
-    endTour,
+    exitTour,
+    advanceTour,
+    tourNewLocationId,
+    setTourNewLocationId,
+    // Legacy alias so nothing else that calls endTour() breaks
+    endTour: exitTour,
   };
 }

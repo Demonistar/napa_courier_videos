@@ -26,7 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { TourOverlay } from '@/components/tutorial/TourOverlay';
-import { useTour, tourSteps } from '@/components/tutorial/useTour';
+import { useTour, TOUR_STEPS } from '@/components/tutorial/useTour';
 import { useToast } from '@/hooks/use-toast';
 import { useDropboxUser } from '@/hooks/use-dropbox-user';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
@@ -97,7 +97,34 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     return cleanup;
   }, []);
 
-  const { isTourActive, startTour, endTour } = useTour();
+  const {
+    isTourActive,
+    tourStepIndex,
+    startTour,
+    exitTour,
+    advanceTour,
+    tourNewLocationId,
+    setTourNewLocationId,
+    endTour,
+  } = useTour();
+
+  // ── Guided tour field tracking ─────────────────────────────────────────────
+  const [tourFieldValues, setTourFieldValues] = useState({
+    state: '', city: '', siteName: '', address: '',
+  });
+
+  /** Whether the "Next" button should be active for the current tour field step. */
+  const canAdvanceTour = useMemo(() => {
+    if (!isTourActive) return true;
+    const stepId = TOUR_STEPS[tourStepIndex]?.id;
+    switch (stepId) {
+      case 'field-state':    return tourFieldValues.state.trim()    !== '';
+      case 'field-city':     return tourFieldValues.city.trim()     !== '';
+      case 'field-site-name': return tourFieldValues.siteName.trim() !== '';
+      case 'field-address':  return tourFieldValues.address.trim()  !== '';
+      default: return true;
+    }
+  }, [isTourActive, tourStepIndex, tourFieldValues]);
 
   const selectedLocation = useMemo(
     () => state.locations.find((loc) => loc.id === selectedLocationId) ?? null,
@@ -123,6 +150,9 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const handleAddLocation = () => {
     setViewMode('add');
     setSelectedLocationId(null);
+    if (isTourActive && TOUR_STEPS[tourStepIndex]?.id === 'add-button') {
+      advanceTour();
+    }
   };
 
   const handleModifyLocation = () => {
@@ -146,6 +176,10 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     if (viewMode === 'add') {
       const newLocation = addLocation(data);
       setSelectedLocationId(newLocation.id);
+      if (isTourActive && TOUR_STEPS[tourStepIndex]?.id === 'form-actions') {
+        setTourNewLocationId(newLocation.id);
+        advanceTour();
+      }
       toast({ title: 'Location added', description: `${data.siteName} added to staging.` });
     } else if (viewMode === 'modify' && selectedLocationId) {
       updateLocation(selectedLocationId, data);
@@ -239,7 +273,11 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onExportJson={exportData}
         onExportCsv={exportCsv}
         currentUser={state.currentUser}
-        onStartTour={startTour}
+        onStartTour={() => {
+          setViewMode('default');
+          setTourFieldValues({ state: '', city: '', siteName: '', address: '' });
+          startTour();
+        }}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenBackup={() => setBackupOpen(true)}
         onOpenImport={() => setImportOpen(true)}
@@ -261,6 +299,11 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
                 }}
                 searchQuery={searchQuery}
                 onAddLocation={handleAddLocation}
+                tourHighlightId={
+                  isTourActive && TOUR_STEPS[tourStepIndex]?.id === 'new-location'
+                    ? tourNewLocationId
+                    : null
+                }
               />
             </div>
           </Panel>
@@ -281,7 +324,15 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
                       location={viewMode === 'modify' ? (selectedLocation ?? undefined) : undefined}
                       allLocations={state.locations}
                       onSave={handleSaveLocation}
-                      onCancel={() => setViewMode('default')}
+                      onCancel={() => {
+                        // If the user cancels during the tour's "form-actions" step,
+                        // exit the tour cleanly rather than leaving a dangling overlay.
+                        if (isTourActive && TOUR_STEPS[tourStepIndex]?.id === 'form-actions') {
+                          exitTour();
+                        }
+                        setViewMode('default');
+                      }}
+                      onTourFieldChange={isTourActive ? setTourFieldValues : undefined}
                     />
                   )}
                 </div>
@@ -426,7 +477,16 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
       />
 
       {/* Tour */}
-      {isTourActive && <TourOverlay steps={tourSteps} onComplete={endTour} />}
+      {isTourActive && TOUR_STEPS[tourStepIndex] && (
+        <TourOverlay
+          step={TOUR_STEPS[tourStepIndex]}
+          stepIndex={tourStepIndex}
+          totalSteps={TOUR_STEPS.length}
+          canAdvance={canAdvanceTour}
+          onNext={advanceTour}
+          onExit={exitTour}
+        />
+      )}
     </div>
   );
 }
