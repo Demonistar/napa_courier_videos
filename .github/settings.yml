@@ -1,0 +1,57 @@
+# Repository settings managed by the GitHub Settings app
+# (https://github.com/apps/settings).
+#
+# Installing the Settings app on this repository lets GitHub enforce these
+# rules automatically.  If the app is not installed, run the companion script:
+#
+#   bash scripts/setup-branch-protection.sh
+#
+# to apply the branch protection rules once via the GitHub CLI (`gh`).
+
+repository:
+  allow_squash_merge: true
+  allow_merge_commit: true
+  allow_rebase_merge: true
+  delete_branch_on_merge: false
+
+branches:
+  - name: main
+
+    protection:
+      # ── Required pull-request reviews ──────────────────────────────────────
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        dismiss_stale_reviews: true
+        require_code_owner_reviews: false
+
+      # ── Required status checks ─────────────────────────────────────────────
+      #
+      # Each entry is the *job name* shown in the GitHub Checks UI — the
+      # `name:` field under `jobs:` in the workflow file, NOT the workflow
+      # file name or the workflow-level `name:`.
+      #
+      # IMPORTANT: only workflows that run on EVERY pull_request (no
+      # `pull_request.paths` filter at the trigger level) may be listed here.
+      # A path-filtered workflow produces no check-run on PRs that don't
+      # match, leaving the required context "pending" forever and blocking
+      # every unrelated PR.
+      #
+      # test-windows-signing-gate.yml runs on all PRs and detects relevant
+      # changes internally — it is safe to require here.
+      #
+      # test-macos-signing-gate.yml and test-linux-build-gate.yml still use
+      # `pull_request.paths` filters and must NOT be listed until they are
+      # updated to use the same always-run + internal-detection pattern.
+      required_status_checks:
+        strict: false        # Do not require the branch to be up-to-date
+        contexts:
+          # Windows signing gate — .github/workflows/test-windows-signing-gate.yml
+          # Runs on every PR; exits early with success when no installer-
+          # affecting files (build-windows.yml, electron-builder.config.js)
+          # are touched.  Fails if the signtool gate in build-windows.yml
+          # stops rejecting unsigned installers.
+          - "Verify signtool gate rejects an unsigned installer"
+
+      # ── Other protection settings ──────────────────────────────────────────
+      enforce_admins: false      # Allow admins to bypass in emergencies
+      restrictions: null         # No push restrictions
