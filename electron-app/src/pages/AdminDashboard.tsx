@@ -534,6 +534,14 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
       <GenerateLinksDialog
         open={generateLinksOpen}
         onOpenChange={setGenerateLinksOpen}
+        existingLocations={state.locations}
+        onApplyUpdates={(updates) => {
+          updates.forEach((u) => updateLocation(u.id, { videoUrl: u.newVideoUrl }));
+          toast({
+            title: `${updates.length} video link${updates.length !== 1 ? 's' : ''} updated`,
+            description: 'Changes are staged and ready to publish.',
+          });
+        }}
         onSendToImport={(headers, rows) => {
           setImportSeedData({ headers, rows });
           setGenerateLinksOpen(false);
