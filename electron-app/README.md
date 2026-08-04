@@ -156,26 +156,47 @@ DROPBOX_FOLDER_PATH=/NAPA Courier Admin
 
 ## Step 4 — Copy Shared Components
 
-Run the setup script to copy unchanged components from the web app source:
+Run the setup script to copy unchanged components from the web app source.
 
+### Windows (cmd.exe or PowerShell)
+
+Git for Windows ships with bash at a known path. Run it directly — you do **not**
+need to open a separate Git Bash window:
+
+```cmd
+"C:\Program Files\Git\bin\bash.exe" setup-components.sh
 ```
+
+If Git is installed somewhere else (e.g. `C:\Program Files (x86)\Git\`), adjust the path accordingly. Or open **Git Bash** from the Start menu and run:
+
+```bash
+bash setup-components.sh
+```
+
+### macOS / Linux
+
+```bash
 bash setup-components.sh
 ```
 
 This copies shadcn/ui primitives, the location tree, forms, import/export, and other shared code from `../artifacts/napa-courier-admin/src/` into `src/`. It is safe to re-run; it overwrites without prompting.
 
-> **Windows users:** Run this in Git Bash, WSL, or any bash-compatible shell.
-> If you don't have bash, see the "Manual Component Copy" section at the end of this file.
+> **No bash at all?** See the "Manual Component Copy" section at the end of this file for an exact table of files to copy by hand.
 
 ---
 
 ## Step 5 — Install Dependencies
 
 ```
-npm install
+npm ci
 ```
 
-This downloads ~200 MB of packages into `node_modules/`. It only needs to be done once (or after a `package.json` update).
+This downloads ~200 MB of packages into `node_modules/` using the committed `package-lock.json`
+so you get the exact same versions used to produce the last known-good build.
+It only needs to be done once (or after a `package-lock.json` update).
+
+> **Do not use `npm install`** if you cloned the repo directly — it re-resolves
+> version ranges and may install newer patch versions than were tested.
 
 ---
 
@@ -547,7 +568,7 @@ Open DevTools and check the Console tab for errors.
 - **macOS:** `Cmd+Option+I` (only available in development builds; in production use `View → Toggle Developer Tools` if the menu is present)
 
 Common causes:
-- Missing `node_modules/` — run `npm install` and rebuild.
+- Missing `node_modules/` — run `npm ci` and rebuild.
 - `src/` is missing component files — run `setup-components.sh` and rebuild.
 
 ### Cmd+C / Cmd+V / Cmd+Z don't work on macOS
@@ -577,9 +598,10 @@ Delete the encrypted token file and sign in again.
 
 When the web app source (`artifacts/napa-courier-admin/src/`) is updated with new features:
 
-1. Pull the latest code from Replit.
-2. Run `bash setup-components.sh` to copy updated shared components.
-3. Run `npm run package` to produce a new installer.
+1. Pull the latest code: `git pull`
+2. Run `npm ci` to pick up any dependency changes.
+3. Copy updated shared components — Windows: `"C:\Program Files\Git\bin\bash.exe" setup-components.sh` / Mac/Linux: `bash setup-components.sh`
+4. Run `npm run package:win` (Windows) or `npm run package:mac` (Mac) to produce a new installer.
 4. Distribute the new installer to all admins.
 
 ---
