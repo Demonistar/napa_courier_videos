@@ -1019,8 +1019,14 @@ function registerIpcHandlers() {
             }
           }
 
+          const bodyText = await createResp.text().catch(() => '');
+          let reason = bodyText;
+          try {
+            const parsed = JSON.parse(bodyText) as { error?: { '.tag'?: string }; error_summary?: string };
+            reason = parsed.error_summary || parsed.error?.['.tag'] || bodyText;
+          } catch { /* not JSON, use raw body text as-is */ }
           return { name: file.name, path: file.path_display, url: '', reused: false,
-            error: `HTTP ${createResp.status}` };
+            error: `HTTP ${createResp.status}: ${reason || 'no details returned'}` };
         } catch (err: unknown) {
           return { name: file.name, path: file.path_display, url: '', reused: false,
             error: (err as Error).message };
