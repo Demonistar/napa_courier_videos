@@ -696,16 +696,37 @@ function registerIpcHandlers() {
    */
   ipcMain.handle('dropbox:listFolder', async (_event, path: string) => {
     try {
-      const resp = await dbxApi('/files/list_folder', {
+      type EntryRaw = { '.tag': string; name: string; path_display: string; path_lower: string };
+      type ListFolderPage = { entries: EntryRaw[]; has_more: boolean; cursor: string };
+
+      // First page
+      const firstResp = await dbxApi('/files/list_folder', {
         path,                               // '' = root; '/Foo/Bar' = subfolder
         include_non_downloadable_files: false,
       });
-      if (resp.status === 409) return { ok: true, folders: [] }; // path doesn't exist
-      if (!resp.ok) throw new Error(`List failed: ${resp.status}`);
-      const data = await resp.json() as {
-        entries: Array<{ '.tag': string; name: string; path_display: string; path_lower: string }>;
-      };
-      const folders = data.entries
+      if (firstResp.status === 409) return { ok: true, folders: [] }; // path doesn't exist
+      if (!firstResp.ok) throw new Error(`List failed: ${firstResp.status}`);
+
+      let page = await firstResp.json() as ListFolderPage;
+      const allEntries: EntryRaw[] = [...page.entries];
+
+      // Follow pagination until Dropbox signals has_more = false
+      while (page.has_more) {
+        const token = await getValidToken();
+        const contResp = await fetch('https://api.dropboxapi.com/2/files/list_folder/continue', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ cursor: page.cursor }),
+        });
+        if (!contResp.ok) throw new Error(`List continue failed: ${contResp.status}`);
+        page = await contResp.json() as ListFolderPage;
+        allEntries.push(...page.entries);
+      }
+
+      const folders = allEntries
         .filter(e => e['.tag'] === 'folder')
         .map(e => ({ name: e.name, pathDisplay: e.path_display, pathLower: e.path_lower }));
       return { ok: true, folders };
