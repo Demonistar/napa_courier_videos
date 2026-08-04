@@ -11,6 +11,7 @@ import {
   Monitor,
   RefreshCw,
   Sun,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { DropboxFolderBrowser, type DetectedFolder } from './DropboxFolderBrowser';
 import { DropboxUserInfo } from '@/hooks/use-dropbox-user';
 
@@ -75,9 +86,16 @@ export function SettingsPanel({
   const [detecting, setDetecting] = useState(false);
   const [detectedFolders, setDetectedFolders] = useState<DetectedFolder[]>([]);
 
+  // Platform + uninstall state
+  const [osPlatform, setOsPlatform] = useState<string>('');
+  const [appBundlePath, setAppBundlePath] = useState<string | null>(null);
+  const [uninstallOpen, setUninstallOpen] = useState(false);
+  const [uninstallError, setUninstallError] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
+
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
-  // Load settings + app version when panel opens.
+  // Load settings, app version, and platform when panel opens.
   useEffect(() => {
     if (!open) return;
     window.electronAPI.settings.get().then((s) => {
@@ -86,10 +104,13 @@ export function SettingsPanel({
       setTheme(s.theme ?? 'light');
     });
     window.electronAPI.app.getVersion().then(setAppVersion);
+    window.electronAPI.app.getPlatform().then(({ platform, appBundlePath: bp }) => {
+      setOsPlatform(platform);
+      setAppBundlePath(bp);
+    });
   }, [open]);
 
-  // Auto-detect existing "NAPA Admin Data" folders when the panel opens and
-  // Dropbox is connected.  Steers new admins to the shared folder immediately.
+  // Auto-detect existing "NAPA Admin Data" folders when connected.
   useEffect(() => {
     if (!open || !dropboxUser.connected) {
       setDetectedFolders([]);
@@ -132,6 +153,34 @@ export function SettingsPanel({
     await window.electronAPI.settings.set({ theme: next });
   };
 
+  // ── Uninstall ──────────────────────────────────────────────────────────────
+
+  const handleUninstall = async () => {
+    setUninstalling(true);
+    setUninstallError(null);
+    try {
+      const result = await window.electronAPI.app.uninstall();
+      if (!result.ok) {
+        setUninstallOpen(false);
+        setUninstallError(result.error ?? 'Uninstall failed. Please try removing the app via your OS settings.');
+      }
+      // Windows success: app will quit in ~400 ms — nothing else to do.
+      // macOS: this branch is never reached (macOS uses the info-only dialog, no IPC call).
+    } catch {
+      setUninstallOpen(false);
+      setUninstallError('Uninstall failed unexpectedly. Please use Windows Settings → Apps to remove the app.');
+    } finally {
+      setUninstalling(false);
+    }
+  };
+
+  const isMac = osPlatform === 'darwin';
+  const isWin = osPlatform === 'win32';
+  // Only show the uninstall section in packaged builds where it's meaningful.
+  // osPlatform is an empty string in the browser/dev context, so the section
+  // stays hidden until it has a real platform value.
+  const showUninstall = isWin || isMac;
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -144,7 +193,7 @@ export function SettingsPanel({
           </DialogHeader>
 
           <div className="space-y-6">
-            {/* ── Dropbox Account ───────────────────────────────────── */}
+            {/* ── Dropbox Account ─────────────────────────────────── */}
             <section className="space-y-3">
               <h3 className="text-sm font-semibold text-foreground">Dropbox Account</h3>
 
@@ -182,7 +231,7 @@ export function SettingsPanel({
               )}
             </section>
 
-            {/* ── Appearance ────────────────────────────────────────── */}
+            {/* ── Appearance ──────────────────────────────────────── */}
             <section className="space-y-2">
               <h3 className="text-sm font-semibold text-foreground">Appearance</h3>
               <p className="text-xs text-muted-foreground">
@@ -213,7 +262,7 @@ export function SettingsPanel({
               </div>
             </section>
 
-            {/* ── Dropbox Data Folder ───────────────────────────────── */}
+            {/* ── Dropbox Data Folder ──────────────────────────────── */}
             <section className="space-y-2">
               <Label htmlFor="folder-path" className="text-sm font-semibold flex items-center gap-2">
                 <FolderOpen className="w-4 h-4" />
@@ -226,7 +275,7 @@ export function SettingsPanel({
                 shares the same data.
               </p>
 
-              {/* Auto-detection results ──────────────────────────────── */}
+              {/* Auto-detection results */}
               {detecting && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
                   <Loader2 className="w-3 h-3 animate-spin shrink-0" />
@@ -293,7 +342,7 @@ export function SettingsPanel({
                 </div>
               )}
 
-              {/* Path input + save + browse ─────────────────────────── */}
+              {/* Path input + Save + Browse */}
               <div className="flex gap-2">
                 <Input
                   id="folder-path"
@@ -333,7 +382,7 @@ export function SettingsPanel({
               </p>
             </section>
 
-            {/* ── Display Name override ──────────────────────────────── */}
+            {/* ── Display Name override ──────────────────────────── */}
             {dropboxUser.connected && (
               <section className="space-y-2">
                 <Label htmlFor="display-name" className="text-sm font-semibold">
@@ -355,9 +404,38 @@ export function SettingsPanel({
                 </div>
               </section>
             )}
+
+            {/* ── Remove App (platform-specific uninstall) ─────────── */}
+            {showUninstall && (
+              <section className="space-y-2 pt-2 border-t border-destructive/20">
+                <h3 className="text-sm font-semibold text-destructive/80">Remove App</h3>
+                <p className="text-xs text-muted-foreground">
+                  Removes the application from this {isMac ? 'Mac' : 'PC'}.{' '}
+                  <strong>Your Dropbox data is never affected.</strong>
+                </p>
+
+                {/* Error from a failed uninstall attempt */}
+                {uninstallError && (
+                  <div className="flex items-start gap-2 p-3 border border-destructive/30 bg-destructive/5 rounded-md text-xs text-destructive">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span className="whitespace-pre-line">{uninstallError}</span>
+                  </div>
+                )}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setUninstallError(null); setUninstallOpen(true); }}
+                  className="gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Uninstall App from this {isMac ? 'Mac' : 'PC'}…
+                </Button>
+              </section>
+            )}
           </div>
 
-          {/* ── Update-ready notice ────────────────────────────────────── */}
+          {/* ── Update-ready notice ────────────────────────────────── */}
           {updateReady && (
             <div className="flex items-center justify-between gap-3 p-3 border border-green-200 bg-green-50 rounded-md">
               <p className="text-xs text-green-800 font-medium">
@@ -374,7 +452,7 @@ export function SettingsPanel({
             </div>
           )}
 
-          {/* ── Version + easter egg ──────────────────────────────────── */}
+          {/* ── Version ───────────────────────────────────────────── */}
           <div className="flex items-center justify-between pt-2">
             <p className="text-[10px] text-muted-foreground/50 select-none">
               {appVersion ? `v${appVersion}` : ''}
@@ -391,7 +469,7 @@ export function SettingsPanel({
         </DialogContent>
       </Dialog>
 
-      {/* Folder browser — nested dialog, opened from the Browse button ─────── */}
+      {/* ── Folder browser (nested dialog) ──────────────────────────────── */}
       <DropboxFolderBrowser
         open={browserOpen}
         onOpenChange={setBrowserOpen}
@@ -405,6 +483,83 @@ export function SettingsPanel({
           setTimeout(() => setFolderSaved(false), 3000);
         }}
       />
+
+      {/* ── Uninstall confirmation dialog ────────────────────────────────── */}
+      <AlertDialog open={uninstallOpen} onOpenChange={setUninstallOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {isMac ? 'Remove app from this Mac' : 'Uninstall app from this PC?'}
+            </AlertDialogTitle>
+
+            {isMac ? (
+              /* macOS: informational only — no destructive action is taken */
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm">
+                  <p>
+                    To remove <strong>NAPA Courier Admin</strong> from your Mac, drag it
+                    to the Trash:
+                  </p>
+                  <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all select-all">
+                    {appBundlePath ?? '/Applications/NAPA Courier Admin.app'}
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    After moving it to the Trash, empty the Trash to complete the removal.
+                    You can also use a utility like AppCleaner to remove associated
+                    preference files from <code>~/Library</code>.
+                  </p>
+                  <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+                    ✓ <strong>Your Dropbox data is not affected.</strong> All locations,
+                    backups, and settings are stored in your Dropbox account and will
+                    remain there after the app is removed.
+                  </div>
+                </div>
+              </AlertDialogDescription>
+            ) : (
+              /* Windows: explicit confirmation before running the uninstaller */
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm">
+                  <p>
+                    This will launch the uninstaller and remove{' '}
+                    <strong>NAPA Courier Admin</strong> from this PC. The app will quit
+                    immediately after the uninstaller starts.
+                  </p>
+                  <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+                    ✓ <strong>Your Dropbox data is not affected.</strong> All locations,
+                    backups, and settings are stored in your Dropbox account and will
+                    remain there after the app is removed from this PC.
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    If you change your mind, you can reinstall the app at any time from
+                    the GitHub Releases page.
+                  </p>
+                </div>
+              </AlertDialogDescription>
+            )}
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              {isMac ? 'Close' : 'Cancel'}
+            </AlertDialogCancel>
+
+            {/* Windows only: actual destructive confirm button */}
+            {isWin && (
+              <AlertDialogAction
+                onClick={handleUninstall}
+                disabled={uninstalling}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90 gap-2"
+              >
+                {uninstalling ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting…</>
+                ) : (
+                  <><Trash2 className="w-3.5 h-3.5" /> Uninstall</>
+                )}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

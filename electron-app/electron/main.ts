@@ -17,6 +17,7 @@ import {
   setCheckForUpdatesMenuItem,
 } from './updater';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -622,6 +623,64 @@ function registerIpcHandlers() {
 
   ipcMain.handle('app:quitAndInstall', () => {
     if (getUpdateDownloaded()) autoUpdater.quitAndInstall();
+  });
+
+  /** Returns the OS platform and, on macOS, the resolved .app bundle path. */
+  ipcMain.handle('app:getPlatform', () => {
+    const platform = process.platform;
+    let appBundlePath: string | null = null;
+    if (platform === 'darwin') {
+      // exe is e.g. /Applications/NAPA Courier Admin.app/Contents/MacOS/NAPA Courier Admin
+      // Strip back to the .app bundle root for display to the user.
+      appBundlePath = app.getPath('exe').replace(/\/Contents\/MacOS\/[^/]+$/, '');
+    }
+    return { platform, appBundlePath };
+  });
+
+  /**
+   * Windows: locate the NSIS-generated Uninstall.exe in the install directory,
+   * launch it detached, then quit immediately so the app isn't holding its own
+   * files open during removal.  Returns an error object if the uninstaller can't
+   * be found so the renderer can show a useful fallback message.
+   *
+   * macOS: no programmatic self-uninstall is attempted.  Returns the .app bundle
+   * path so the renderer can show exact drag-to-Trash instructions.  Nothing is
+   * deleted or modified.
+   *
+   * In both cases Dropbox is NEVER touched — this is purely a local-install action.
+   */
+  ipcMain.handle('app:uninstall', () => {
+    if (process.platform === 'win32') {
+      // electron-builder NSIS names the uninstaller "Uninstall {productName}.exe"
+      // and places it alongside the main executable.
+      const installDir = path.dirname(app.getPath('exe'));
+      const uninstallerPath = path.join(installDir, `Uninstall ${app.getName()}.exe`);
+
+      if (!fs.existsSync(uninstallerPath)) {
+        return {
+          ok: false,
+          platform: 'win32',
+          error: `Uninstaller not found at:\n${uninstallerPath}\n\nYou can remove the app manually via Windows Settings → Apps → Installed apps.`,
+        };
+      }
+
+      // Spawn detached with stdio ignored so the child survives after we quit.
+      const child = spawn(uninstallerPath, [], { detached: true, stdio: 'ignore' });
+      child.unref();
+
+      // Short delay so the NSIS process is past its startup before we exit.
+      setTimeout(() => app.quit(), 400);
+      return { ok: true, platform: 'win32' };
+    }
+
+    if (process.platform === 'darwin') {
+      // Return the bundle path for the manual-instructions dialog.  We do not
+      // attempt self-deletion of the .app bundle.
+      const appBundlePath = app.getPath('exe').replace(/\/Contents\/MacOS\/[^/]+$/, '');
+      return { ok: true, platform: 'darwin', appBundlePath };
+    }
+
+    return { ok: false, platform: process.platform, error: 'Uninstall is not supported on this platform.' };
   });
 
   // ── Dropbox folder browser ─────────────────────────────────────────────────

@@ -84,6 +84,20 @@ const api = {
     },
     quitAndInstall: (): Promise<void> =>
       ipcRenderer.invoke('app:quitAndInstall'),
+    /** Returns the OS platform string and the .app path on macOS. */
+    getPlatform: (): Promise<{ platform: string; appBundlePath: string | null }> =>
+      ipcRenderer.invoke('app:getPlatform'),
+    /**
+     * Windows: launches the NSIS uninstaller and quits.
+     * macOS:   returns the .app bundle path for manual drag-to-Trash instructions.
+     * Dropbox data is NEVER touched by either path.
+     */
+    uninstall: (): Promise<{
+      ok: boolean;
+      platform?: string;
+      appBundlePath?: string;
+      error?: string;
+    }> => ipcRenderer.invoke('app:uninstall'),
   },
 
   dropbox: {
