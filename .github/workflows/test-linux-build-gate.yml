@@ -1,0 +1,107 @@
+name: Test Linux build gate
+
+# Runs on pull requests that touch the Electron installer config or the
+# Linux release workflow, confirming that electron-builder can produce
+# a valid AppImage and .deb before the PR is merged.
+#
+# Unlike the Windows/macOS signing gate tests, there is nothing to sign
+# on Linux — the gate here is purely "does the build succeed and produce
+# the expected artifacts?"
+#
+# Run this workflow from Actions → "Test Linux build gate" → Run workflow,
+# or it fires automatically on matching pull requests.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/build-linux.yml"
+      - "electron-app/electron-builder.config.js"
+      - "electron-app/package.json"
+      - "electron-app/electron/**"
+      - "electron-app/src/**"
+
+jobs:
+  linux-build-gate:
+    name: Verify Linux build produces AppImage + deb
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ───────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: electron-app/package-lock.json
+
+      # ── 3. Install system build tools ────────────────────────────────────────
+      - name: Install system build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fakeroot dpkg
+
+      # ── 4. Install Node dependencies ─────────────────────────────────────────
+      - name: Install dependencies
+        working-directory: electron-app
+        run: npm ci
+
+      # ── 5. Copy shared components from the web app source ────────────────────
+      - name: Copy shared components
+        working-directory: electron-app
+        run: bash setup-components.sh
+
+      # ── 6. Build and package (no publish) ────────────────────────────────────
+      #
+      # Builds the full Electron app and packages it for Linux.  DROPBOX_APP_KEY
+      # is read from the committed .env file so no secret is needed here.
+      # --publish never ensures nothing is uploaded even if GH_TOKEN were present.
+      - name: Build and package
+        working-directory: electron-app
+        run: npm run build && electron-builder --linux --publish never
+
+      # ── 7. Verify output artifacts ────────────────────────────────────────────
+      #
+      # Confirms both expected output files exist and are non-empty.  Catches
+      # silent build failures where electron-builder exits 0 but produces no
+      # output (e.g. a misconfigured target name or arch).
+      - name: Verify output artifacts
+        working-directory: electron-app
+        run: |
+          echo "Contents of dist-installer/:"
+          ls -lh dist-installer/
+
+          APPIMAGE=$(find dist-installer -maxdepth 1 -name "*.AppImage" | head -1)
+          DEB=$(find dist-installer -maxdepth 1 -name "*.deb" | head -1)
+          MANIFEST=$(find dist-installer -maxdepth 1 -name "latest-linux.yml" | head -1)
+
+          FAILED=0
+          for LABEL_FILE in "AppImage:${APPIMAGE}" "deb:${DEB}" "latest-linux.yml:${MANIFEST}"; do
+            LABEL="${LABEL_FILE%%:*}"
+            FILE="${LABEL_FILE#*:}"
+            if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
+              echo "❌ FAIL — expected ${LABEL} output not found in dist-installer/" >&2
+              FAILED=1
+              continue
+            fi
+            SIZE=$(stat -c%s "$FILE")
+            if [ "$SIZE" -lt 1024 ]; then
+              echo "❌ FAIL — '$(basename "$FILE")' is only ${SIZE} bytes (suspiciously small)" >&2
+              FAILED=1
+              continue
+            fi
+            echo "✓  $(basename "$FILE")  ($(numfmt --to=iec "$SIZE"))"
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo ""
+            echo "Linux build gate FAILED — one or more expected artifacts are missing or empty."
+            echo "Check the 'Build and package' step above for electron-builder errors."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Linux build gate PASSED — AppImage, .deb, and latest-linux.yml are present."
+          echo "   The release workflow (build-linux.yml) will produce valid artifacts on tag push."

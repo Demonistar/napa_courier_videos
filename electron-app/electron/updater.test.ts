@@ -66,6 +66,7 @@ import {
   NETWORK_ERROR_CODES,
   isChecksumError,
   isWriteError,
+  isRunningFromAppImage,
   initAutoUpdater,
   checkForUpdatesManually,
   setCheckForUpdatesMenuItem,
@@ -79,6 +80,21 @@ const mockWebContents = { send: vi.fn() };
 const mockWin = {
   webContents: mockWebContents,
 } as unknown as import('electron').BrowserWindow;
+
+// ─── Global APPIMAGE default ──────────────────────────────────────────────────
+// Tests run on Linux (Replit).  Without APPIMAGE set, initAutoUpdater exits
+// early via the AppImage guard.  We set a fake value before every test so the
+// guard doesn't interfere with suites that aren't specifically testing it.
+// Suites that DO test the guard delete the var in their own beforeEach and
+// restore it in afterEach; the global hook re-sets it before the next suite.
+beforeEach(() => {
+  if (!process.env.APPIMAGE) process.env.APPIMAGE = '/fake/test.AppImage';
+});
+afterEach(() => {
+  // Only clean up if the value is still the sentinel — don't clobber a real
+  // APPIMAGE set by a guard-specific test's afterEach.
+  if (process.env.APPIMAGE === '/fake/test.AppImage') delete process.env.APPIMAGE;
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -626,5 +642,181 @@ describe('initAutoUpdater — update-cache cleanup on download failure', () => {
     expect(() => {
       mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
     }).not.toThrow();
+  });
+});
+
+// ─── isRunningFromAppImage ────────────────────────────────────────────────────
+
+describe('isRunningFromAppImage', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    // Restore platform and clean up APPIMAGE env var after every test.
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    delete process.env.APPIMAGE;
+  });
+
+  it('returns true on Linux when APPIMAGE env var is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
+    expect(isRunningFromAppImage()).toBe(true);
+  });
+
+  it('returns false on Linux when APPIMAGE env var is absent', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    delete process.env.APPIMAGE;
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+
+  it('returns false on Linux when APPIMAGE is an empty string', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    process.env.APPIMAGE = '';
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+
+  it('returns false on Windows even when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.APPIMAGE = '/some/path';
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+
+  it('returns false on macOS even when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    process.env.APPIMAGE = '/some/path';
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+});
+
+// ─── Linux AppImage guard — initAutoUpdater ───────────────────────────────────
+//
+// On Linux, initAutoUpdater must skip all setup when the app was not launched
+// from its own AppImage (APPIMAGE env var absent).  It must proceed normally
+// when APPIMAGE is set, and on all non-Linux platforms regardless.
+
+describe('initAutoUpdater — Linux AppImage guard', () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    delete process.env.APPIMAGE;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    delete process.env.APPIMAGE;
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('skips checkForUpdates on Linux when not running from AppImage', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('skips event listener registration on Linux when not running from AppImage', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    initAutoUpdater(mockWin);
+    // No listeners registered — emitting events should have no effect.
+    expect(mockAutoUpdater.listenerCount('update-downloaded')).toBe(0);
+    expect(mockAutoUpdater.listenerCount('error')).toBe(0);
+  });
+
+  it('runs normally on Linux when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it('runs normally on Windows regardless of APPIMAGE', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it('runs normally on macOS regardless of APPIMAGE', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── Linux AppImage guard — checkForUpdatesManually ──────────────────────────
+//
+// When an admin triggers "Check for Updates" on Linux outside the AppImage,
+// a helpful dialog must explain the situation rather than silently doing nothing.
+
+describe('checkForUpdatesManually — Linux AppImage guard', () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    delete process.env.APPIMAGE;
+    // initAutoUpdater must be called first so the updater is in a valid state.
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    delete process.env.APPIMAGE;
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('shows an "Updates unavailable" dialog on Linux when not running from AppImage', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    delete process.env.APPIMAGE;
+
+    checkForUpdatesManually(mockWin);
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.title).toBe('Updates unavailable');
+    expect(opts.detail).toContain('AppImage');
+  });
+
+  it('does NOT call checkForUpdates on Linux outside AppImage', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    delete process.env.APPIMAGE;
+    mockAutoUpdater.checkForUpdates.mockClear();
+
+    checkForUpdatesManually(mockWin);
+
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally on Linux when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    process.env.APPIMAGE = '/home/user/NAPA-Courier-Admin.AppImage';
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
+
+    checkForUpdatesManually(mockWin);
+
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it('proceeds normally on Windows', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
+    mockDialog.showMessageBox.mockClear();
+
+    checkForUpdatesManually(mockWin);
+
+    // Should not show the "Updates unavailable" dialog
+    const calls = mockDialog.showMessageBox.mock.calls as [unknown, Electron.MessageBoxOptions][];
+    const unavailableCalls = calls.filter(([, opts]) => opts.title === 'Updates unavailable');
+    expect(unavailableCalls).toHaveLength(0);
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
   });
 });

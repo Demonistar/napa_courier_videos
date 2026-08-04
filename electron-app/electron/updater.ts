@@ -70,6 +70,20 @@ export function isWriteError(err: Error): boolean {
 }
 
 /**
+ * Returns true when the app is running on Linux AND was launched directly from
+ * its own AppImage (the AppImage runtime sets the APPIMAGE env var to the
+ * resolved path of the .AppImage file).
+ *
+ * electron-updater can only replace the running binary when it is the AppImage
+ * itself — it cannot update an app that was extracted, installed via a package
+ * manager, or launched some other way.  Callers should skip the auto-update
+ * flow when this returns false on Linux.
+ */
+export function isRunningFromAppImage(): boolean {
+  return process.platform === 'linux' && Boolean(process.env.APPIMAGE);
+}
+
+/**
  * Delete the electron-updater "pending" download cache so a corrupt or
  * partially-written file cannot cause an infinite retry loop on the next
  * update check.
@@ -145,6 +159,19 @@ export function checkForUpdatesManually(win: BrowserWindow): void {
     });
     return;
   }
+  // On Linux the app can only update itself when launched directly from the
+  // AppImage.  Inform the user rather than silently doing nothing.
+  if (process.platform === 'linux' && !isRunningFromAppImage()) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Updates unavailable',
+      message: 'This copy of NAPA Courier Admin was not launched from the AppImage.',
+      detail:
+        'To receive automatic updates, download the latest .AppImage from GitHub Releases ' +
+        'and run that file directly.',
+    });
+    return;
+  }
   // If an update is already on disk, jump straight to the restart prompt.
   if (_updateDownloaded) {
     showRestartDialog(win);
@@ -171,6 +198,13 @@ export function checkForUpdatesManually(win: BrowserWindow): void {
 export function initAutoUpdater(win: BrowserWindow): void {
   // Only run in the packaged app — dev builds have no update feed.
   if (!app.isPackaged) return;
+  // On Linux, electron-updater can only replace the binary when running from
+  // the AppImage.  Skip the background check entirely when APPIMAGE is not set
+  // so the admin never sees a spurious "update failed" error.
+  if (process.platform === 'linux' && !isRunningFromAppImage()) {
+    console.log('[auto-updater] Linux: not running from AppImage — auto-updates skipped');
+    return;
+  }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
