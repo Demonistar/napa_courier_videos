@@ -186,6 +186,40 @@ async function dbxDownload(dropboxPath: string): Promise<{ content: string; rev:
   return { content, rev: apiResult.rev ?? '' };
 }
 
+/** Download raw bytes from Dropbox — used for images. */
+async function dbxDownloadBytes(dropboxPath: string): Promise<Buffer | null> {
+  const token = await getValidToken();
+  const resp = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token.accessToken}`,
+      'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
+    },
+  });
+  if (resp.status === 409) return null; // file not found
+  if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+  const arrayBuf = await resp.arrayBuffer();
+  return Buffer.from(arrayBuf);
+}
+
+/**
+ * Build a deterministic, filesystem-safe image filename from a location's
+ * account number and site name.
+ * e.g. accountNumber="63", siteName="BMW of NWA", ext="png"
+ *   → "63-BMW-OF-NWA.png"
+ */
+function sanitizeImageName(accountNumber: string, siteName: string, ext: string): string {
+  const safePart = (s: string) =>
+    s.trim().toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')   // non-alphanumeric runs → single dash
+      .replace(/^-+|-+$/g, '');       // trim leading/trailing dashes
+  const acc  = safePart(accountNumber);
+  const site = safePart(siteName);
+  const safeExt = (ext || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const base = [acc, site].filter(Boolean).join('-') || `upload-${Date.now()}`;
+  return `${base}.${safeExt}`;
+}
+
 /**
  * Upload a file to Dropbox.
  * @param mode 'overwrite' | { update: rev } — use update+rev for write-safety.
@@ -193,7 +227,7 @@ async function dbxDownload(dropboxPath: string): Promise<{ content: string; rev:
  */
 async function dbxUpload(
   dropboxPath: string,
-  content: string,
+  content: string | Buffer,
   mode: 'overwrite' | { update: string } = 'overwrite',
 ): Promise<string> {
   const token = await getValidToken();
@@ -366,6 +400,45 @@ function folderPath(folder: string, file: string): string {
   return `${folder.replace(/\/$/, '')}/NAPA Admin Data/${file}`;
 }
 
+/**
+ * One-time migration: scan locations for inline base64 imageUrls, upload each
+ * as a real file into NAPA Admin Data/images/, and replace the stored value
+ * with the relative path "images/<filename>".  Returns true if any records
+ * were updated (caller should re-save staging).
+ */
+async function migrateBase64Images(
+  folder: string,
+  staging: { locations?: Array<{ imageUrl?: string | null; accountNumber?: string; siteName?: string }> },
+): Promise<boolean> {
+  const locations = staging.locations ?? [];
+  let changed = false;
+  for (const loc of locations) {
+    const url = loc.imageUrl ?? '';
+    if (!url.startsWith('data:image/')) continue;
+
+    // Parse "data:image/png;base64,<data>"
+    const match = url.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/s);
+    if (!match) continue;
+    const ext     = match[1].split('+')[0].toLowerCase();  // e.g. "png", "jpeg"
+    const b64data = match[2];
+
+    const fileName = sanitizeImageName(loc.accountNumber ?? '', loc.siteName ?? '', ext === 'jpeg' ? 'jpg' : ext);
+    const dropboxImagePath = folderPath(folder, `images/${fileName}`);
+
+    try {
+      const buf = Buffer.from(b64data, 'base64');
+      await dbxUpload(dropboxImagePath, buf);
+      loc.imageUrl = `images/${fileName}`;
+      changed = true;
+      console.log(`[migrate] Uploaded ${fileName} for "${loc.siteName ?? ''}"`);
+    } catch (err) {
+      console.error(`[migrate] Failed to upload image for "${loc.siteName ?? ''}":`, err);
+      // Leave the base64 value in place — better than losing the image.
+    }
+  }
+  return changed;
+}
+
 async function loadStagingFile(folder: string) {
   const result = await dbxDownload(folderPath(folder, 'locations-staging.json'));
   if (!result) {
@@ -381,7 +454,25 @@ async function loadStagingFile(folder: string) {
       rev: '',
     };
   }
-  return { data: JSON.parse(result.content), rev: result.rev };
+  const data = JSON.parse(result.content);
+  let { rev } = result;
+
+  // Transparently migrate any legacy base64 imageUrls to Dropbox files.
+  try {
+    const migrated = await migrateBase64Images(folder, data);
+    if (migrated) {
+      const newRev = await dbxUpload(
+        folderPath(folder, 'locations-staging.json'),
+        JSON.stringify({ ...data, lastModified: new Date().toISOString() }, null, 2),
+      );
+      rev = newRev;
+      console.log('[migrate] Staging file re-saved with image paths.');
+    }
+  } catch (err) {
+    console.error('[migrate] Migration error (non-fatal):', err);
+  }
+
+  return { data, rev };
 }
 
 async function saveStagingFile(folder: string, data: unknown, rev: string): Promise<{ ok: boolean; conflict?: boolean; newRev?: string; error?: string }> {
@@ -818,6 +909,50 @@ function registerIpcHandlers() {
 
       const errText = await napaResp.text().catch(() => String(napaResp.status));
       return { ok: false, error: `Dropbox error ${napaResp.status}: ${errText}` };
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  // ── Image upload / download ──────────────────────────────────────────────────
+
+  /**
+   * Upload an image file into NAPA Admin Data/images/ and return the relative
+   * path that should be stored in the location record ("images/<filename>").
+   */
+  ipcMain.handle(
+    'dropbox:uploadImage',
+    async (_event, { base64, fileName }: { base64: string; fileName: string }) => {
+      try {
+        const folder = loadSettings().dropboxFolderPath;
+        if (!folder) return { ok: false, error: 'Dropbox folder path not configured' };
+        const buf  = Buffer.from(base64, 'base64');
+        const dest = folderPath(folder, `images/${fileName}`);
+        await dbxUpload(dest, buf);
+        return { ok: true, relativePath: `images/${fileName}` };
+      } catch (err: unknown) {
+        return { ok: false, error: (err as Error).message };
+      }
+    },
+  );
+
+  /**
+   * Download an image from NAPA Admin Data/<relativePath> and return it as a
+   * base64 data URI suitable for use in an <img src="…"> tag.
+   */
+  ipcMain.handle('dropbox:downloadImage', async (_event, relativePath: string) => {
+    try {
+      const folder = loadSettings().dropboxFolderPath;
+      if (!folder) return { ok: false, error: 'Dropbox folder path not configured' };
+      const src = folderPath(folder, relativePath);
+      const buf = await dbxDownloadBytes(src);
+      if (!buf) return { ok: false, error: 'Image not found' };
+      const ext  = relativePath.split('.').pop()?.toLowerCase() ?? 'png';
+      const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+                 : ext === 'webp'                  ? 'image/webp'
+                 : ext === 'gif'                   ? 'image/gif'
+                 : 'image/png';
+      return { ok: true, dataUri: `data:${mime};base64,${buf.toString('base64')}` };
     } catch (err: unknown) {
       return { ok: false, error: (err as Error).message };
     }

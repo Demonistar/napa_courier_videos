@@ -1,4 +1,5 @@
-import { Copy, ExternalLink, Image as ImageIcon } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Copy, ExternalLink, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { Location } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -13,10 +14,49 @@ interface LocationDetailProps {
     changedBy: string;
     changedAt: string;
   }>;
+  /**
+   * Optional Electron-specific resolver: called when imageUrl is a relative
+   * Dropbox path (e.g. "images/63-BMW-OF-NWA.png").  Should return a base64
+   * data URI or a temporary HTTPS URL suitable for <img src>.
+   * When absent, imageUrl is used directly (handles https:// and data: URIs).
+   */
+  resolveImageUrl?: (relativePath: string) => Promise<string>;
 }
 
-export function LocationDetail({ location, auditHistory }: LocationDetailProps) {
+/** Returns true for relative Dropbox image paths stored by the Electron app. */
+function isRelativePath(url: string): boolean {
+  return url.startsWith('images/') || (!!url && !url.startsWith('http') && !url.startsWith('data:'));
+}
+
+export function LocationDetail({ location, auditHistory, resolveImageUrl }: LocationDetailProps) {
   const { toast } = useToast();
+
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  const rawImageUrl = location.imageUrl ?? '';
+
+  useEffect(() => {
+    setResolvedSrc(null);
+    setImageError(false);
+
+    if (!rawImageUrl) return;
+
+    if (isRelativePath(rawImageUrl) && resolveImageUrl) {
+      let cancelled = false;
+      setImageLoading(true);
+      resolveImageUrl(rawImageUrl)
+        .then((src) => { if (!cancelled) { setResolvedSrc(src); setImageLoading(false); } })
+        .catch(() => { if (!cancelled) { setImageError(true); setImageLoading(false); } });
+      return () => { cancelled = true; };
+    }
+
+    // Direct URL or data URI — use as-is.
+    setResolvedSrc(rawImageUrl);
+  }, [rawImageUrl, resolveImageUrl]);
+
+  const displaySrc = resolvedSrc;
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -77,10 +117,20 @@ export function LocationDetail({ location, auditHistory }: LocationDetailProps) 
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
               Image
             </p>
-            {location.imageUrl ? (
+            {imageLoading ? (
+              <div className="border rounded-lg p-8 flex flex-col items-center justify-center bg-muted/30">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground mb-2" />
+                <p className="text-sm text-muted-foreground">Loading image…</p>
+              </div>
+            ) : imageError ? (
+              <div className="border border-dashed rounded-lg p-8 flex flex-col items-center justify-center bg-muted/30">
+                <ImageIcon className="w-8 h-8 text-muted-foreground mb-2" />
+                <p className="text-sm text-muted-foreground">Image unavailable</p>
+              </div>
+            ) : displaySrc ? (
               <div className="border rounded-lg overflow-hidden bg-muted">
                 <img
-                  src={location.imageUrl}
+                  src={displaySrc}
                   alt={location.siteName}
                   className="w-full h-48 object-cover"
                   data-testid="img-location"

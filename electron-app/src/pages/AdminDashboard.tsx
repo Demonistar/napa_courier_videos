@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useLocationStore, type BackupEntry } from '@/lib/store';
 import { TopBar } from '@/components/layout/TopBar';
@@ -88,6 +88,51 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const [importOpen, setImportOpen] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
+
+  // ── Image upload / display ─────────────────────────────────────────────────
+  // Cache resolved data-URIs by relative path so we don't re-download on
+  // every re-render.
+  const imageCache = useRef<Map<string, string>>(new Map());
+
+  /** Upload an image file to Dropbox and return the path to store in the record. */
+  const handleImageUpload = async (
+    file: File,
+    accountNumber: string,
+    siteName: string,
+  ): Promise<string> => {
+    const buf = await file.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const ext = file.name.split('.').pop() ?? 'png';
+    // Build the filename using the values the admin has typed so far.
+    // Sanitise: uppercase, spaces→dashes, strip non-alphanumeric.
+    const safePart = (s: string) =>
+      s.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const acc  = safePart(accountNumber);
+    const site = safePart(siteName);
+    const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+    const fileName = [acc, site].filter(Boolean).join('-')
+      ? `${[acc, site].filter(Boolean).join('-')}.${safeExt}`
+      : `upload-${Date.now()}.${safeExt}`;
+
+    const result = await window.electronAPI.dropbox.uploadImage({ base64, fileName });
+    if (!result.ok || !result.relativePath) {
+      throw new Error(result.error ?? 'Image upload failed');
+    }
+    return result.relativePath;
+  };
+
+  /** Resolve a Dropbox-relative image path to a data URI for display. */
+  const resolveImageUrl = async (relativePath: string): Promise<string> => {
+    const cached = imageCache.current.get(relativePath);
+    if (cached) return cached;
+
+    const result = await window.electronAPI.dropbox.downloadImage(relativePath);
+    if (!result.ok || !result.dataUri) {
+      throw new Error(result.error ?? 'Image download failed');
+    }
+    imageCache.current.set(relativePath, result.dataUri);
+    return result.dataUri;
+  };
 
   // Hydrate update-ready state on mount and keep it current via push events.
   useEffect(() => {
@@ -319,7 +364,11 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
               <Panel defaultSize={60} minSize={40}>
                 <div className="h-full bg-background overflow-auto" data-tour-id="detail-panel">
                   {viewMode === 'default' && selectedLocation && (
-                    <LocationDetail location={selectedLocation} auditHistory={auditHistory} />
+                    <LocationDetail
+                      location={selectedLocation}
+                      auditHistory={auditHistory}
+                      resolveImageUrl={resolveImageUrl}
+                    />
                   )}
                   {viewMode === 'default' && !selectedLocation && <EmptyState />}
                   {(viewMode === 'add' || viewMode === 'modify') && (
@@ -336,6 +385,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
                         setViewMode('default');
                       }}
                       onTourFieldChange={isTourActive ? setTourFieldValues : undefined}
+                      onImageUpload={handleImageUpload}
                     />
                   )}
                 </div>

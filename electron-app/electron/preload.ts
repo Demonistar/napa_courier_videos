@@ -138,6 +138,26 @@ const api = {
       message?: string;
       error?: string;
     }> => ipcRenderer.invoke('dropbox:testFolderPath', path),
+
+    /**
+     * Upload an image file into NAPA Admin Data/images/ and return the
+     * relative path "images/<filename>" to store in the location record.
+     */
+    uploadImage: (payload: { base64: string; fileName: string }): Promise<{
+      ok: boolean;
+      relativePath?: string;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:uploadImage', payload),
+
+    /**
+     * Download an image from NAPA Admin Data/<relativePath> and return it as
+     * a base64 data URI for display in an <img> tag.
+     */
+    downloadImage: (relativePath: string): Promise<{
+      ok: boolean;
+      dataUri?: string;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:downloadImage', relativePath),
   },
 };
 
