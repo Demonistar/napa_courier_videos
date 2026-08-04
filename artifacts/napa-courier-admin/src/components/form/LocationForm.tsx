@@ -175,7 +175,7 @@ export function LocationForm({
     });
   };
 
-  const isValid = state.trim() && city.trim() && siteName.trim() && address.trim();
+  const isValid = state.trim() && city.trim() && siteName.trim();
 
   // Notify parent of field changes for tour-step gating.
   useEffect(() => {

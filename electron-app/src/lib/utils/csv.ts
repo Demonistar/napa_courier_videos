@@ -100,7 +100,7 @@ export const IMPORT_FIELDS: { field: ImportField; label: string; required: boole
   { field: 'accountNumber',  label: 'Account Number',  required: false },
   { field: 'state',          label: 'State',           required: true  },
   { field: 'city',           label: 'City',            required: true  },
-  { field: 'address',        label: 'Address',         required: true  },
+  { field: 'address',        label: 'Address',         required: false },
   { field: 'instructions',   label: 'Instructions / Notes', required: false },
   { field: 'videoUrl',       label: 'Video URL',       required: false },
   { field: 'imageUrl',       label: 'Image URL',       required: false },
