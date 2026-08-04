@@ -85,6 +85,22 @@ const api = {
     quitAndInstall: (): Promise<void> =>
       ipcRenderer.invoke('app:quitAndInstall'),
   },
+
+  dropbox: {
+    /** List immediate subfolders at a Dropbox path. Pass '' for the root. */
+    listFolder: (path: string): Promise<{
+      ok: boolean;
+      folders?: Array<{ name: string; pathDisplay: string; pathLower: string }>;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:listFolder', path),
+
+    /** Search the entire Dropbox for folders named "NAPA Admin Data". */
+    findNapaAdminFolders: (): Promise<{
+      ok: boolean;
+      folders?: Array<{ name: string; pathDisplay: string; pathLower: string }>;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:findNapaAdminFolders'),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

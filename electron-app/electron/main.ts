@@ -623,6 +623,67 @@ function registerIpcHandlers() {
   ipcMain.handle('app:quitAndInstall', () => {
     if (getUpdateDownloaded()) autoUpdater.quitAndInstall();
   });
+
+  // ── Dropbox folder browser ─────────────────────────────────────────────────
+
+  /**
+   * List immediate subfolders at a Dropbox path.
+   * Pass path='' for the Dropbox root.  Returns only folder entries (not files).
+   */
+  ipcMain.handle('dropbox:listFolder', async (_event, path: string) => {
+    try {
+      const resp = await dbxApi('/files/list_folder', {
+        path,                               // '' = root; '/Foo/Bar' = subfolder
+        include_non_downloadable_files: false,
+      });
+      if (resp.status === 409) return { ok: true, folders: [] }; // path doesn't exist
+      if (!resp.ok) throw new Error(`List failed: ${resp.status}`);
+      const data = await resp.json() as {
+        entries: Array<{ '.tag': string; name: string; path_display: string; path_lower: string }>;
+      };
+      const folders = data.entries
+        .filter(e => e['.tag'] === 'folder')
+        .map(e => ({ name: e.name, pathDisplay: e.path_display, pathLower: e.path_lower }));
+      return { ok: true, folders };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message, folders: [] };
+    }
+  });
+
+  /**
+   * Search the entire connected Dropbox account for folders whose name is
+   * exactly "NAPA Admin Data" (case-insensitive).  Used on Settings open to
+   * steer new admins to the folder every other admin is already using.
+   */
+  ipcMain.handle('dropbox:findNapaAdminFolders', async () => {
+    try {
+      const resp = await dbxApi('/files/search_v2', {
+        query: 'NAPA Admin Data',
+        options: { filename_only: true },
+      });
+      if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
+      type SearchMatch = {
+        metadata?: {
+          '.tag'?: string;
+          metadata?: { '.tag'?: string; name?: string; path_display?: string; path_lower?: string };
+        };
+      };
+      const data = await resp.json() as { matches?: SearchMatch[] };
+      const folders = (data.matches ?? [])
+        .filter(m =>
+          m?.metadata?.metadata?.['.tag'] === 'folder' &&
+          m?.metadata?.metadata?.name?.toLowerCase() === 'napa admin data'
+        )
+        .map(m => ({
+          name:        m.metadata!.metadata!.name!,
+          pathDisplay: m.metadata!.metadata!.path_display!,
+          pathLower:   m.metadata!.metadata!.path_lower!,
+        }));
+      return { ok: true, folders };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message, folders: [] };
+    }
+  });
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
