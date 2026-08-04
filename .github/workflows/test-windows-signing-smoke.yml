@@ -1,0 +1,227 @@
+name: Test Windows signing smoke (self-signed cert)
+
+# Smoke-tests the FULL signing path end-to-end on a real windows-latest runner
+# using the same steps as build-windows.yml, with a self-signed test certificate
+# injected in the format WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD expect.
+#
+# WHY THIS MATTERS
+# The signing-gate test (`test-windows-signing-gate.yml`) only covers the
+# negative path: it confirms signtool REJECTS an unsigned file.  This
+# workflow covers the positive path: it confirms that when WIN_CSC_LINK and
+# WIN_CSC_KEY_PASSWORD are properly configured, electron-builder produces a
+# signed installer and signtool verify /pa exits 0.
+#
+# A misconfigured gate that always exits non-zero would break every release
+# while the negative test still passes.  A production cert that is expired,
+# in the wrong format, or silently ignored by electron-builder would produce
+# an unsigned installer that clears the gate only if the gate itself were
+# broken.  This test catches both failure modes.
+#
+# WHAT IT DOES
+#   1. Runs the same checkout / Node / npm ci / setup-components steps as
+#      the production workflow.
+#   2. Creates a self-signed code-signing certificate, exports it as a PFX,
+#      and adds it to the machine Trusted Root CA store so that the /pa policy
+#      can build a trusted chain.
+#   3. Runs the EXACT same build command as build-windows.yml step 6:
+#        npm run build && electron-builder --win --publish never
+#      with WIN_CSC_LINK set to the PFX path and WIN_CSC_KEY_PASSWORD set to
+#      the PFX password — exercising the full electron-builder signing path.
+#   4. Runs the EXACT gate script from build-windows.yml step 7 against the
+#      real NSIS installer produced by electron-builder and asserts exit 0.
+#
+# WHEN IT RUNS
+# • workflow_dispatch — on-demand at any time.
+# • pull_request — when build-windows.yml, test-windows-signing-gate.yml,
+#   test-windows-signing-smoke.yml, or electron-builder.config.js change.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/build-windows.yml"
+      - ".github/workflows/test-windows-signing-gate.yml"
+      - ".github/workflows/test-windows-signing-smoke.yml"
+      - "electron-app/electron-builder.config.js"
+
+jobs:
+  signing-smoke-test:
+    name: Smoke-test full signing path with self-signed certificate
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ───────────────────────────────────────────────────────────
+      # Mirrors build-windows.yml step 2 exactly.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: electron-app/package-lock.json
+
+      # ── 3. Install dependencies ───────────────────────────────────────────────
+      # Mirrors build-windows.yml step 3 exactly.
+      - name: Install dependencies
+        working-directory: electron-app
+        run: npm ci
+
+      # ── 4. Copy shared components ─────────────────────────────────────────────
+      # Mirrors build-windows.yml step 5 exactly.
+      - name: Copy shared components
+        shell: bash
+        working-directory: electron-app
+        run: bash setup-components.sh
+
+      # ── 5. Create self-signed code-signing certificate ────────────────────────
+      #
+      # New-SelfSignedCertificate with -Type CodeSigningCert creates a cert with
+      # the Code Signing EKU (1.3.6.1.5.5.7.3.3) that signtool requires.
+      #
+      # The cert is placed in Cert:\LocalMachine\My so we can export it as a PFX
+      # (the same format electron-builder consumes via WIN_CSC_LINK).
+      #
+      # We also add it to Cert:\LocalMachine\Root (Trusted Root Certification
+      # Authorities) so that `signtool verify /pa` (the Default Authentication
+      # policy) can build a trusted chain ending at a root the machine trusts.
+      # Without this the /pa check rejects the signature even though it is
+      # cryptographically valid and electron-builder applied it correctly.
+      - name: Create self-signed code-signing certificate
+        id: create-cert
+        shell: pwsh
+        run: |
+          $password = "SmokeCertPassword1!"
+
+          # Create the cert in the machine personal store.
+          $cert = New-SelfSignedCertificate `
+            -Subject "CN=NAPA Courier Smoke Test Signing Cert" `
+            -CertStoreLocation "Cert:\LocalMachine\My" `
+            -KeyUsage DigitalSignature `
+            -Type CodeSigningCert `
+            -NotAfter (Get-Date).AddYears(1) `
+            -HashAlgorithm SHA256
+
+          Write-Host "Created certificate: $($cert.Thumbprint)"
+
+          # Export as PFX so electron-builder can consume it via WIN_CSC_LINK.
+          # RUNNER_TEMP is outside the workspace so it won't be picked up by
+          # any artifact upload steps added in the future.
+          $pfxPath = Join-Path $env:RUNNER_TEMP "smoke-test-signing.pfx"
+          $securePwd = ConvertTo-SecureString $password -AsPlainText -Force
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePwd | Out-Null
+          Write-Host "Exported PFX to: $pfxPath"
+
+          # Trust the cert at machine root level so /pa policy accepts the chain.
+          $rootStore = New-Object `
+            System.Security.Cryptography.X509Certificates.X509Store(
+              [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+              [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+            )
+          $rootStore.Open(
+            [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite
+          )
+          $rootStore.Add($cert)
+          $rootStore.Close()
+          Write-Host "Certificate added to LocalMachine\Root — /pa policy will trust it."
+
+          # Expose values to subsequent steps via step outputs.
+          # NOTE: the password is not a real production secret — it protects a
+          # throwaway cert that exists only for the duration of this workflow run.
+          echo "PFX_PATH=$pfxPath" >> $env:GITHUB_OUTPUT
+          echo "PFX_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+
+      # ── 6. Build and package with test certificate ────────────────────────────
+      #
+      # This is the EXACT command from build-windows.yml step 6, with the
+      # ephemeral self-signed certificate injected via the same environment
+      # variables that the production workflow reads from repository secrets:
+      #
+      #   WIN_CSC_LINK         — path to the PFX (electron-builder also accepts
+      #                          a base64-encoded PFX; this path form is equivalent
+      #                          and avoids an extra encoding step in the test)
+      #   WIN_CSC_KEY_PASSWORD — password for the PFX
+      #
+      # This exercises the full electron-builder signing path: electron-builder
+      # reads the cert, invokes signtool to sign the compiled executable and the
+      # NSIS installer, and writes the result to dist-installer/.
+      #
+      # DROPBOX_APP_KEY is set to a placeholder so the renderer build succeeds;
+      # the actual key is only used at runtime, not during the build step.
+      - name: Build and package with test certificate
+        working-directory: electron-app
+        env:
+          WIN_CSC_LINK: ${{ steps.create-cert.outputs.PFX_PATH }}
+          WIN_CSC_KEY_PASSWORD: ${{ steps.create-cert.outputs.PFX_PASSWORD }}
+          DROPBOX_APP_KEY: "smoke-test-placeholder"
+        run: npm run build && electron-builder --win --publish never
+
+      # ── 7. Run the gate script — expect it to PASS ───────────────────────────
+      #
+      # This is the EXACT gate script from build-windows.yml step 7, reproduced
+      # verbatim so any future change to the production gate is visible as a diff
+      # here too.  The script exits 0 only when the installer carries a valid,
+      # trusted Authenticode signature — which is exactly what step 6 produced.
+      #
+      # Unlike the signing-gate test (which uses continue-on-error and asserts
+      # non-zero), this step must exit 0.  If it fails here it means either:
+      #   • electron-builder silently skipped signing (secrets misconfigured), or
+      #   • the gate logic itself is broken (always exits non-zero), or
+      #   • the cert trust setup in step 5 was insufficient.
+      # Any of those is a genuine regression worth surfacing.
+      - name: Run gate script against signed installer (expect success)
+        shell: pwsh
+        working-directory: electron-app
+        run: |
+          # Locate the top-level NSIS installer (not win-unpacked/ executables).
+          # -File and no -Recurse ensure we stay in dist-installer/ itself.
+          $exe = Get-ChildItem -Path dist-installer -Filter "*.exe" -File |
+                 Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "No installer .exe found in dist-installer/ — build may have failed."
+            exit 1
+          }
+          Write-Host "Verifying signature on: $($exe.FullName)"
+
+          # signtool.exe is on PATH on windows-latest runners (Windows SDK)
+          & signtool verify /pa "$($exe.FullName)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error @"
+          Authenticode signature verification FAILED.
+          The installer '$($exe.Name)' is unsigned or has an invalid signature.
+          Ensure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are set as repository
+          secrets and contain a valid, unexpired .pfx certificate.
+          The unsigned installer has NOT been uploaded to GitHub Releases.
+          "@
+            exit 1
+          }
+          Write-Host "Signature OK — proceeding to publish."
+
+      # ── 8. Confirm the positive path ─────────────────────────────────────────
+      #
+      # Reaching this step proves the complete end-to-end positive path:
+      #   • electron-builder consumed WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD and
+      #     signed the installer (not silently skipped).
+      #   • signtool verify /pa accepted the Authenticode signature as trusted.
+      #   • The gate script exits 0, so the publish step would be reached.
+      #
+      # In production, replacing the self-signed test cert with a certificate
+      # issued by a CA that Windows trusts by default (e.g. DigiCert, Sectigo)
+      # is the only change needed — no other workflow modifications are required.
+      - name: Confirm signed installer passes gate
+        shell: bash
+        run: |
+          echo ""
+          echo "✅ PASS — electron-builder produced a signed Windows installer"
+          echo "   and signtool verify /pa exited 0 against the real NSIS .exe."
+          echo ""
+          echo "The full production signing path is confirmed working:"
+          echo "  • electron-builder read WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD"
+          echo "  • The installer carries a valid Authenticode signature"
+          echo "  • The gate in build-windows.yml step 7 would allow publish"
+          echo ""
+          echo "In production, supply a certificate from a Windows-trusted CA"
+          echo "(e.g. DigiCert, Sectigo) as WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD"
+          echo "repository secrets — no other workflow changes are needed."
