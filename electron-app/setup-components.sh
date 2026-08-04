@@ -13,7 +13,8 @@
 #   • src/components/form/     — LocationForm (unchanged)
 #   • src/components/import/   — CsvImport (unchanged)
 #   • src/components/tree/     — LocationTree (unchanged)
-#   • src/components/tutorial/ — TourOverlay, useTour (unchanged)
+#   NOT copied (fully rewritten for Electron — different interfaces/exports):
+#   • src/components/tutorial/  — useTour.ts, TourOverlay.tsx
 #   • src/components/layout/   — TopBar, HelpMenu (unchanged)
 #   • src/hooks/use-toast.ts   — unchanged
 #   • src/hooks/use-mobile.tsx — unchanged
@@ -85,7 +86,10 @@ copy_dir "components/detail"
 copy_dir "components/form"
 copy_dir "components/import"
 copy_dir "components/tree"
-copy_dir "components/tutorial"
+# NOTE: components/tutorial/ is intentionally NOT copied.
+# Both useTour.ts and TourOverlay.tsx are fully rewritten for the Electron
+# version — different prop interfaces, TOUR_STEPS export, IPC hooks.
+# The versions already in electron-app/src/components/tutorial/ are correct.
 
 echo ""
 echo "── Layout (TopBar + HelpMenu) ─────────────────────────────────────────"

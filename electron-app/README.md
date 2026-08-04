@@ -618,7 +618,7 @@ If `setup-components.sh` won't run, copy these folders manually from
 | `components/form/` | `src/components/form/` |
 | `components/import/` | `src/components/import/` |
 | `components/tree/` | `src/components/tree/` |
-| `components/tutorial/` | `src/components/tutorial/` |
+| `components/tutorial/` | **DO NOT COPY** — rewritten for Electron (different prop interfaces and `TOUR_STEPS` export; the correct versions are already in `src/components/tutorial/`) |
 | `components/layout/TopBar.tsx` | `src/components/layout/TopBar.tsx` |
 | `components/layout/HelpMenu.tsx` | `src/components/layout/HelpMenu.tsx` |
 | `hooks/use-toast.ts` | `src/hooks/use-toast.ts` |
