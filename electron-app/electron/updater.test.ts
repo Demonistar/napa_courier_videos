@@ -249,3 +249,136 @@ describe('initAutoUpdater — update-not-available event', () => {
     expect(fakeMenuItem.enabled).toBe(true);
   });
 });
+
+// ─── Download-phase failure scenarios — manual check ─────────────────────────
+//
+// These cover the failure modes that are invisible to admins without explicit
+// error handling: network interruption mid-download, checksum/tamper detection,
+// and write failures (disk full, permission denied).
+
+describe('initAutoUpdater — download interruption (manual check)', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    // Never resolves — simulates a check that is in flight when the error fires
+    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
+    initAutoUpdater(mockWin);
+    checkForUpdatesManually(mockWin);
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('shows a network dialog when the download is interrupted mid-transfer (ECONNRESET)', () => {
+    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('internet connection');
+  });
+
+  it('shows a network dialog when the download times out mid-transfer (ETIMEDOUT)', () => {
+    mockAutoUpdater.emit('error', makeError('connect ETIMEDOUT', 'ETIMEDOUT'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('internet connection');
+  });
+
+  it('shows a generic error dialog for a checksum mismatch (tampered or partial file)', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('checksum mismatch');
+    expect(opts.detail).not.toContain('internet connection');
+  });
+
+  it('shows a generic error dialog when the disk is full (ENOSPC)', () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('ENOSPC');
+    expect(opts.detail).not.toContain('internet connection');
+  });
+
+  it('shows a generic error dialog when writing the update file is denied (EACCES)', () => {
+    mockAutoUpdater.emit('error', makeError('EACCES: permission denied, open \'/tmp/update.exe\'', 'EACCES'));
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('warning');
+    expect(opts.title).toBe('Update check failed');
+    expect(opts.detail).toContain('EACCES');
+    expect(opts.detail).not.toContain('internet connection');
+  });
+
+  it('re-enables the menu item after any download-phase error', () => {
+    const fakeMenuItem = { enabled: false } as unknown as import('electron').MenuItem;
+    setCheckForUpdatesMenuItem(fakeMenuItem);
+
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+
+    expect(fakeMenuItem.enabled).toBe(true);
+  });
+});
+
+// ─── Download-phase failure scenarios — startup (automatic) check ─────────────
+//
+// The same errors must stay completely silent during the background startup
+// check so the app does not bother admins with pop-ups on every launch.
+
+describe('initAutoUpdater — download interruption (startup / automatic check)', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    initAutoUpdater(mockWin);
+    // No checkForUpdatesManually() call — _manualCheckPending remains false
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('stays silent when the download is interrupted mid-transfer (ECONNRESET)', () => {
+    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
+    expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the download times out mid-transfer (ETIMEDOUT)', () => {
+    mockAutoUpdater.emit('error', makeError('connect ETIMEDOUT', 'ETIMEDOUT'));
+    expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when a checksum mismatch is detected during a background download', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the disk is full during a background download (ENOSPC)', () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+    expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when writing is denied during a background download (EACCES)', () => {
+    mockAutoUpdater.emit('error', makeError('EACCES: permission denied, open \'/tmp/update.exe\'', 'EACCES'));
+    expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+});
