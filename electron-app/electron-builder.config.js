@@ -72,6 +72,20 @@ const config = {
     ...(hasLicense ? { license: 'build/license.txt' } : {}),
   },
 
+  // ── Linux ──────────────────────────────────────────────────────────────────
+  // Builds run on an ubuntu-latest GitHub Actions runner (see build-linux.yml).
+  // Produces an AppImage (universal, no install required) and a .deb package
+  // for Debian / Ubuntu systems.
+  linux: {
+    target: [
+      { target: 'AppImage', arch: ['x64'] },
+      { target: 'deb',      arch: ['x64'] },
+    ],
+    category: 'Utility',
+    // electron-builder auto-derives Linux icon sizes from icon.icns when no
+    // explicit PNG is supplied, so no guard is needed here.
+  },
+
   // ── macOS ──────────────────────────────────────────────────────────────────
   // Builds run on a macos-latest GitHub Actions runner (see build-macos.yml).
   // Produces two .dmg files: one for Intel (x64) and one for Apple Silicon (arm64).

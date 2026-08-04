@@ -1,0 +1,139 @@
+name: Build Linux Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create/update releases and upload assets
+
+jobs:
+  build-linux:
+    name: Build Linux installers (AppImage + deb)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ───────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: electron-app/package-lock.json
+
+      # ── 3. Install system dependencies ───────────────────────────────────────
+      #
+      # electron-builder requires rpmbuild (rpm package), fakeroot, and
+      # dpkg-dev to produce .deb packages on Ubuntu runners.
+      - name: Install system build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fakeroot dpkg
+
+      # ── 4. Install Node dependencies ─────────────────────────────────────────
+      - name: Install dependencies
+        working-directory: electron-app
+        run: npm ci
+
+      # ── 5. Stamp version from release tag ────────────────────────────────────
+      #
+      # Strips the leading "v" from the tag (e.g. v1.2.0 → 1.2.0) and writes it
+      # into electron-app/package.json so electron-builder picks it up for the
+      # installer filename and About screen.  --no-git-tag-version prevents npm
+      # from trying to create a new git tag inside the runner.
+      # --allow-same-version makes this a no-op when the version was already
+      # bumped locally by `npm run release:patch` before pushing the tag.
+      #
+      # The tag is passed through an env variable rather than inline shell
+      # interpolation to prevent workflow-command injection from crafted tag names.
+      # The version is validated against a strict SemVer pattern before use.
+      - name: Set version from tag
+        working-directory: electron-app
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${GIT_TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: tag '$GIT_TAG' does not produce a valid SemVer version ('$VERSION')" >&2
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # ── 6. Copy shared components from the web app source ────────────────────
+      #
+      # setup-components.sh copies shadcn/ui primitives, tree, form, and other
+      # shared code from artifacts/napa-courier-admin/src/ into electron-app/src/.
+      - name: Copy shared components
+        working-directory: electron-app
+        run: bash setup-components.sh
+
+      # ── 7. Build and package ─────────────────────────────────────────────────
+      #
+      # Produces two Linux artifacts:
+      #   • NAPA Courier Admin-<version>.AppImage  — universal, no install required
+      #   • napa-courier-admin_<version>_amd64.deb — Debian / Ubuntu package
+      #
+      # DROPBOX_APP_KEY is required for the app to connect to Dropbox at runtime.
+      # Linux packages do not require code signing (no Gatekeeper equivalent).
+      - name: Build and package
+        working-directory: electron-app
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+        run: npm run build && electron-builder --linux --publish never
+
+      # ── 8. Verify output artifacts ────────────────────────────────────────────
+      #
+      # Confirms both expected output files exist and are non-empty before
+      # uploading.  Catches silent build failures where electron-builder exits 0
+      # but produces no output (e.g. misconfigured target).
+      - name: Verify output artifacts
+        working-directory: electron-app
+        run: |
+          echo "Contents of dist-installer/:"
+          ls -lh dist-installer/
+
+          APPIMAGE=$(find dist-installer -maxdepth 1 -name "*.AppImage" | head -1)
+          DEB=$(find dist-installer -maxdepth 1 -name "*.deb" | head -1)
+          MANIFEST=$(find dist-installer -maxdepth 1 -name "latest-linux.yml" | head -1)
+
+          for FILE in "$APPIMAGE" "$DEB" "$MANIFEST"; do
+            if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
+              echo "Error: expected output file not found (AppImage / .deb / latest-linux.yml)" >&2
+              exit 1
+            fi
+            SIZE=$(stat -c%s "$FILE")
+            if [ "$SIZE" -lt 1024 ]; then
+              echo "Error: '$FILE' is suspiciously small (${SIZE} bytes) — build may have failed" >&2
+              exit 1
+            fi
+            echo "✓  $(basename "$FILE")  ($(numfmt --to=iec "$SIZE"))"
+          done
+
+      # ── 9. Publish to GitHub Releases ────────────────────────────────────────
+      #
+      # Creates (or updates) the GitHub Release for this tag and uploads:
+      #   • The .AppImage (universal Linux installer)
+      #   • The .deb package (Debian / Ubuntu)
+      #   • latest-linux.yml — the electron-updater manifest that lets installed
+      #     copies of the app detect and download new versions automatically.
+      #     Without this file, auto-updates won't work on Linux.
+      #
+      # The release may already exist if the Windows or macOS job ran first;
+      # the `gh release create … || true` pattern handles both cases safely.
+      #
+      # GH_TOKEN — GitHub Actions provides this automatically (no secret to add).
+      - name: Publish to GitHub Releases
+        working-directory: electron-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release create "${TAG}" --title "${TAG}" --generate-notes 2>/dev/null || true
+          gh release upload "${TAG}" \
+            dist-installer/*.AppImage \
+            dist-installer/*.deb \
+            dist-installer/latest-linux.yml \
+            --clobber
