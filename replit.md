@@ -34,7 +34,7 @@ _Describe the high-level user-facing capabilities of this app once they exist._
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- **Just do the work.** Never ask for confirmation before starting a task or applying changes. Implement immediately and report what was done.
 
 ## Gotchas
 
