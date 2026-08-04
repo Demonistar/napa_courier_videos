@@ -109,6 +109,9 @@ export function SettingsPanel({
   // Mismatch-confirmation state
   const [mismatchConfirmOpen, setMismatchConfirmOpen] = useState(false);
 
+  // Prevent double-invocation of quitAndInstall if admin clicks Restart rapidly.
+  const [restartingUpdate, setRestartingUpdate] = useState(false);
+
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
   // Load settings, app version, and platform when panel opens.
@@ -549,9 +552,17 @@ export function SettingsPanel({
               <Button
                 size="sm"
                 className="gap-1.5 bg-green-600 hover:bg-green-700 text-white shrink-0"
-                onClick={() => { onOpenChange(false); window.electronAPI.app.quitAndInstall(); }}
+                disabled={restartingUpdate}
+                onClick={() => {
+                  if (restartingUpdate) return;
+                  setRestartingUpdate(true);
+                  onOpenChange(false);
+                  window.electronAPI.app.quitAndInstall();
+                }}
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                {restartingUpdate
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <RefreshCw className="w-3.5 h-3.5" />}
                 Restart
               </Button>
             </div>

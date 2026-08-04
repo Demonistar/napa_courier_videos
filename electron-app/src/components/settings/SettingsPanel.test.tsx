@@ -131,4 +131,29 @@ describe('SettingsPanel — Restart to Install button', () => {
       screen.queryByRole('button', { name: /restart/i }),
     ).not.toBeInTheDocument();
   });
+
+  it('calls quitAndInstall exactly once even when the button is clicked twice rapidly', () => {
+    const { quitAndInstall } = stubElectronAPI();
+
+    render(<SettingsPanel {...defaultProps({ updateReady: true })} />);
+
+    const restartButton = screen.getByRole('button', { name: /restart/i });
+    fireEvent.click(restartButton);
+    fireEvent.click(restartButton);
+
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the Restart button after the first click', () => {
+    stubElectronAPI();
+
+    render(<SettingsPanel {...defaultProps({ updateReady: true })} />);
+
+    const restartButton = screen.getByRole('button', { name: /restart/i });
+    expect(restartButton).not.toBeDisabled();
+
+    fireEvent.click(restartButton);
+
+    expect(restartButton).toBeDisabled();
+  });
 });
