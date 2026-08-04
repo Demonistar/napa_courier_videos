@@ -272,6 +272,28 @@ async function dbxDownload(dropboxPath) {
   const content = await resp.text();
   return { content, rev: apiResult.rev ?? "" };
 }
+async function dbxDownloadBytes(dropboxPath) {
+  const token = await getValidToken();
+  const resp = await fetch("https://content.dropboxapi.com/2/files/download", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token.accessToken}`,
+      "Dropbox-API-Arg": JSON.stringify({ path: dropboxPath })
+    }
+  });
+  if (resp.status === 409) return null;
+  if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+  const arrayBuf = await resp.arrayBuffer();
+  return Buffer.from(arrayBuf);
+}
+function sanitizeImageName(accountNumber, siteName, ext) {
+  const safePart = (s) => s.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const acc = safePart(accountNumber);
+  const site = safePart(siteName);
+  const safeExt = (ext || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const base = [acc, site].filter(Boolean).join("-") || `upload-${Date.now()}`;
+  return `${base}.${safeExt}`;
+}
 async function dbxUpload(dropboxPath, content, mode = "overwrite") {
   const token = await getValidToken();
   const modeArg = mode === "overwrite" ? { ".tag": "overwrite" } : { ".tag": "update", update: mode.update };
@@ -412,6 +434,30 @@ h1{color:#16a34a;margin:0 0 .5rem}p{color:#6b7280;margin:0}</style></head>
 function folderPath(folder, file) {
   return `${folder.replace(/\/$/, "")}/NAPA Admin Data/${file}`;
 }
+async function migrateBase64Images(folder, staging) {
+  const locations = staging.locations ?? [];
+  let changed = false;
+  for (const loc of locations) {
+    const url = loc.imageUrl ?? "";
+    if (!url.startsWith("data:image/")) continue;
+    const match = url.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/s);
+    if (!match) continue;
+    const ext = match[1].split("+")[0].toLowerCase();
+    const b64data = match[2];
+    const fileName = sanitizeImageName(loc.accountNumber ?? "", loc.siteName ?? "", ext === "jpeg" ? "jpg" : ext);
+    const dropboxImagePath = folderPath(folder, `images/${fileName}`);
+    try {
+      const buf = Buffer.from(b64data, "base64");
+      await dbxUpload(dropboxImagePath, buf);
+      loc.imageUrl = `images/${fileName}`;
+      changed = true;
+      console.log(`[migrate] Uploaded ${fileName} for "${loc.siteName ?? ""}"`);
+    } catch (err) {
+      console.error(`[migrate] Failed to upload image for "${loc.siteName ?? ""}":`, err);
+    }
+  }
+  return changed;
+}
 async function loadStagingFile(folder) {
   const result = await dbxDownload(folderPath(folder, "locations-staging.json"));
   if (!result) {
@@ -426,7 +472,22 @@ async function loadStagingFile(folder) {
       rev: ""
     };
   }
-  return { data: JSON.parse(result.content), rev: result.rev };
+  const data = JSON.parse(result.content);
+  let { rev } = result;
+  try {
+    const migrated = await migrateBase64Images(folder, data);
+    if (migrated) {
+      const newRev = await dbxUpload(
+        folderPath(folder, "locations-staging.json"),
+        JSON.stringify({ ...data, lastModified: (/* @__PURE__ */ new Date()).toISOString() }, null, 2)
+      );
+      rev = newRev;
+      console.log("[migrate] Staging file re-saved with image paths.");
+    }
+  } catch (err) {
+    console.error("[migrate] Migration error (non-fatal):", err);
+  }
+  return { data, rev };
 }
 async function saveStagingFile(folder, data, rev) {
   try {
@@ -726,6 +787,35 @@ You can remove the app manually via Windows Settings → Apps → Installed apps
       }
       const errText = await napaResp.text().catch(() => String(napaResp.status));
       return { ok: false, error: `Dropbox error ${napaResp.status}: ${errText}` };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  electron.ipcMain.handle(
+    "dropbox:uploadImage",
+    async (_event, { base64, fileName }) => {
+      try {
+        const folder = loadSettings().dropboxFolderPath;
+        if (!folder) return { ok: false, error: "Dropbox folder path not configured" };
+        const buf = Buffer.from(base64, "base64");
+        const dest = folderPath(folder, `images/${fileName}`);
+        await dbxUpload(dest, buf);
+        return { ok: true, relativePath: `images/${fileName}` };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }
+  );
+  electron.ipcMain.handle("dropbox:downloadImage", async (_event, relativePath) => {
+    try {
+      const folder = loadSettings().dropboxFolderPath;
+      if (!folder) return { ok: false, error: "Dropbox folder path not configured" };
+      const src = folderPath(folder, relativePath);
+      const buf = await dbxDownloadBytes(src);
+      if (!buf) return { ok: false, error: "Image not found" };
+      const ext = relativePath.split(".").pop()?.toLowerCase() ?? "png";
+      const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/png";
+      return { ok: true, dataUri: `data:${mime};base64,${buf.toString("base64")}` };
     } catch (err) {
       return { ok: false, error: err.message };
     }

@@ -1,5 +1,5 @@
 import { resolve } from 'path';
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import { loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -14,7 +14,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     main: {
-      plugins: [externalizeDepsPlugin()],
       // Statically replace process.env.* references in main-process code with
       // the literal values read from .env at build time.  This is the ONLY
       // mechanism that gets these values into the packaged binary — there is no
@@ -27,12 +26,17 @@ export default defineConfig(({ mode }) => {
         alias: { '@': resolve(__dirname, 'src') },
       },
       build: {
+        // externalizeDeps replaces the deprecated externalizeDepsPlugin() call;
+        // supported in electron-vite v5+ and the upcoming v6.
+        externalizeDeps: true,
         lib: { entry: resolve(__dirname, 'electron/main.ts') },
       },
     },
     preload: {
-      plugins: [externalizeDepsPlugin()],
       build: {
+        // externalizeDeps replaces the deprecated externalizeDepsPlugin() call;
+        // supported in electron-vite v5+ and the upcoming v6.
+        externalizeDeps: true,
         lib: { entry: resolve(__dirname, 'electron/preload.ts') },
       },
     },
