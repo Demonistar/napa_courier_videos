@@ -58,6 +58,7 @@ import {
   checkForUpdatesManually,
   setCheckForUpdatesMenuItem,
   resetUpdaterStateForTesting,
+  getUpdateDownloaded,
 } from './updater';
 
 // ─── Shared test window stub ──────────────────────────────────────────────────
@@ -380,5 +381,76 @@ describe('initAutoUpdater — download interruption (startup / automatic check)'
   it('stays silent when writing is denied during a background download (EACCES)', () => {
     mockAutoUpdater.emit('error', makeError('EACCES: permission denied, open \'/tmp/update.exe\'', 'EACCES'));
     expect(mockDialog.showMessageBox).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Stale-download flag and IPC badge dismissal on error ─────────────────────
+//
+// If electron-updater set _updateDownloaded = true before the error fired
+// (e.g. checksum mismatch detected after the file was written), the next
+// restart must NOT silently install the corrupt file.  The error handler must
+// (a) reset the flag and (b) tell the renderer to dismiss the update badge.
+
+describe('initAutoUpdater — error clears _updateDownloaded and sends app:updateCancelled', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('resets _updateDownloaded to false when an error fires after a completed download', () => {
+    // Simulate a successful download that set the flag…
+    mockAutoUpdater.emit('update-downloaded');
+    expect(getUpdateDownloaded()).toBe(true);
+
+    // …then a subsequent error (e.g. checksum mismatch on verification).
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    expect(getUpdateDownloaded()).toBe(false);
+  });
+
+  it('resets _updateDownloaded to false even when the flag was never set', () => {
+    expect(getUpdateDownloaded()).toBe(false);
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+    expect(getUpdateDownloaded()).toBe(false);
+  });
+
+  it('sends app:updateCancelled via IPC on every error (startup check path)', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    expect(mockWebContents.send).toHaveBeenCalledWith('app:updateCancelled');
+  });
+
+  it('sends app:updateCancelled via IPC on every error (manual check path)', () => {
+    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
+    checkForUpdatesManually(mockWin);
+
+    mockAutoUpdater.emit('error', makeError('ECONNRESET', 'ECONNRESET'));
+
+    expect(mockWebContents.send).toHaveBeenCalledWith('app:updateCancelled');
+  });
+
+  it('sends app:updateCancelled exactly once per error event', () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+
+    const calls = mockWebContents.send.mock.calls.filter(
+      ([channel]: [string]) => channel === 'app:updateCancelled',
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it('sends app:updateCancelled for a network error too', () => {
+    mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com'));
+
+    expect(mockWebContents.send).toHaveBeenCalledWith('app:updateCancelled');
   });
 });

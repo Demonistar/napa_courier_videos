@@ -147,8 +147,14 @@ export function initAutoUpdater(win: BrowserWindow): void {
   autoUpdater.on('error', (err) => {
     const wasManual = _manualCheckPending;
     _manualCheckPending = false;
+    // Clear the downloaded flag so a stale/corrupt file cannot silently install
+    // on the next restart — electron-updater may have set it to true before the
+    // error fired (e.g. checksum mismatch detected after the write completed).
+    _updateDownloaded = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error('[auto-updater] error:', err?.message ?? err);
+    // Tell the renderer to dismiss the in-app update badge.
+    win.webContents.send('app:updateCancelled');
 
     if (wasManual) {
       const detail = isNetworkError(err as Error)
