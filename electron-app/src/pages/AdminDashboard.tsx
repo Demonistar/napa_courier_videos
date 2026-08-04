@@ -88,13 +88,14 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
 
-  // Hydrate update-ready state on mount and keep it current via push event.
+  // Hydrate update-ready state on mount and keep it current via push events.
   useEffect(() => {
     window.electronAPI.app.getUpdateStatus().then(({ updateDownloaded }) => {
       if (updateDownloaded) setUpdateReady(true);
     });
-    const cleanup = window.electronAPI.app.onUpdateReady(() => setUpdateReady(true));
-    return cleanup;
+    const cleanupReady     = window.electronAPI.app.onUpdateReady(()      => setUpdateReady(true));
+    const cleanupCancelled = window.electronAPI.app.onUpdateCancelled(() => setUpdateReady(false));
+    return () => { cleanupReady(); cleanupCancelled(); };
   }, []);
 
   const {

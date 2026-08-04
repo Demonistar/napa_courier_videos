@@ -82,6 +82,12 @@ const api = {
       // Return a cleanup function so callers can remove the listener.
       return () => ipcRenderer.removeListener('app:updateReady', handler);
     },
+    /** Fired when a download that had already set the badge fails mid-session. */
+    onUpdateCancelled: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('app:updateCancelled', handler);
+      return () => ipcRenderer.removeListener('app:updateCancelled', handler);
+    },
     quitAndInstall: (): Promise<void> =>
       ipcRenderer.invoke('app:quitAndInstall'),
     /** Returns the OS platform string and the .app path on macOS. */

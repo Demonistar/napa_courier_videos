@@ -9,6 +9,8 @@
 
 import { app, dialog, BrowserWindow, MenuItem } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import path from 'node:path';
+import fs from 'node:fs';
 
 // ─── Network-error classification ─────────────────────────────────────────────
 
@@ -38,6 +40,51 @@ export function resetUpdaterStateForTesting(): void {
   _updateDownloaded = false;
   _manualCheckPending = false;
   _checkForUpdatesMenuItem = null;
+}
+
+/**
+ * Returns true when the error looks like a checksum / hash / signature failure
+ * rather than a network problem.  Used to decide whether to wipe the local
+ * update cache so the corrupt file is not retried on the next check.
+ */
+export function isChecksumError(err: Error): boolean {
+  const msg = (err?.message ?? '').toLowerCase();
+  return (
+    msg.includes('sha512')    ||
+    msg.includes('sha256')    ||
+    msg.includes('checksum')  ||
+    msg.includes('hash')      ||
+    msg.includes('signature') ||
+    msg.includes('integrity')
+  );
+}
+
+/**
+ * Delete the electron-updater "pending" download cache so a corrupt or
+ * partially-written file cannot cause an infinite retry loop on the next
+ * update check.
+ *
+ * electron-updater stores downloads at:
+ *   <userData>/../<appName>-updater/pending/
+ * (same convention on Windows and macOS).
+ */
+function clearUpdateCache(): void {
+  try {
+    const pendingDir = path.join(
+      app.getPath('userData'),
+      '..',
+      `${app.getName()}-updater`,
+      'pending',
+    );
+    if (fs.existsSync(pendingDir)) {
+      fs.rmSync(pendingDir, { recursive: true, force: true });
+      console.log('[auto-updater] cleared pending cache after checksum failure:', pendingDir);
+    }
+  } catch (e) {
+    // Non-fatal — log and continue.  A leftover file is annoying but the
+    // error handler has already reset _updateDownloaded, so the badge is gone.
+    console.warn('[auto-updater] could not clear update cache:', (e as Error)?.message ?? e);
+  }
 }
 
 /** Whether an update has been fully downloaded and is waiting to install. */
@@ -155,6 +202,13 @@ export function initAutoUpdater(win: BrowserWindow): void {
     console.error('[auto-updater] error:', err?.message ?? err);
     // Tell the renderer to dismiss the in-app update badge.
     win.webContents.send('app:updateCancelled');
+
+    // Wipe the pending download cache on checksum/hash/integrity errors so
+    // the corrupt file is not retried on the next update check, preventing
+    // an infinite re-download loop.
+    if (isChecksumError(err as Error)) {
+      clearUpdateCache();
+    }
 
     if (wasManual) {
       const detail = isNetworkError(err as Error)
