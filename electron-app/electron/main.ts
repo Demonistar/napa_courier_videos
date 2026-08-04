@@ -22,7 +22,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
-// ─── Build-time config (set via .env before running `npm run package`) ────────
+// ─── Build-time config (set via .env before running `pnpm run package`) ───────
 
 const DROPBOX_APP_KEY = process.env.DROPBOX_APP_KEY ?? '';
 const DEFAULT_FOLDER_PATH = process.env.DROPBOX_FOLDER_PATH ?? '/NAPA Courier Admin';

@@ -806,6 +806,89 @@ You can remove the app manually via Windows Settings → Apps → Installed apps
       }
     }
   );
+  electron.ipcMain.handle("dropbox:generateLinks", async (_event, folderPath2) => {
+    try {
+      const files = [];
+      let resp = await dbxApi("/files/list_folder", { path: folderPath2, recursive: false, limit: 2e3 });
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => String(resp.status));
+        return { ok: false, error: `Could not list folder: ${msg}` };
+      }
+      let page = await resp.json();
+      for (const e of page.entries) {
+        if (e[".tag"] === "file") files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+      }
+      while (page.has_more) {
+        resp = await dbxApi("/files/list_folder/continue", { cursor: page.cursor });
+        if (!resp.ok) break;
+        page = await resp.json();
+        for (const e of page.entries) {
+          if (e[".tag"] === "file") files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+        }
+      }
+      if (files.length === 0) return { ok: true, files: 0, results: [] };
+      const getOrCreate = async (file) => {
+        try {
+          const listResp = await dbxApi("/sharing/list_shared_links", {
+            path: file.path_lower,
+            direct_only: true
+          });
+          if (listResp.ok) {
+            const listData = await listResp.json();
+            if (listData.links?.length > 0) {
+              return { name: file.name, path: file.path_display, url: listData.links[0].url, reused: true };
+            }
+          }
+          const createResp = await dbxApi("/sharing/create_shared_link_with_settings", {
+            path: file.path_lower,
+            settings: { requested_visibility: "public" }
+          });
+          if (createResp.ok) {
+            const cd = await createResp.json();
+            return { name: file.name, path: file.path_display, url: cd.url, reused: false };
+          }
+          if (createResp.status === 409) {
+            const ed = await createResp.json();
+            if (ed?.error?.[".tag"] === "shared_link_already_exists") {
+              const existingUrl = ed.error.metadata?.url;
+              if (existingUrl) return { name: file.name, path: file.path_display, url: existingUrl, reused: true };
+              const fl = await dbxApi("/sharing/list_shared_links", { path: file.path_lower });
+              if (fl.ok) {
+                const fd = await fl.json();
+                const url = fd.links?.[0]?.url ?? "";
+                return { name: file.name, path: file.path_display, url, reused: true };
+              }
+            }
+          }
+          return {
+            name: file.name,
+            path: file.path_display,
+            url: "",
+            reused: false,
+            error: `HTTP ${createResp.status}`
+          };
+        } catch (err) {
+          return {
+            name: file.name,
+            path: file.path_display,
+            url: "",
+            reused: false,
+            error: err.message
+          };
+        }
+      };
+      const results = [];
+      const BATCH = 5;
+      for (let i = 0; i < files.length; i += BATCH) {
+        const batch = files.slice(i, i + BATCH);
+        const batchResults = await Promise.all(batch.map(getOrCreate));
+        results.push(...batchResults);
+      }
+      return { ok: true, files: files.length, results };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
   electron.ipcMain.handle("dropbox:downloadImage", async (_event, relativePath) => {
     try {
       const folder = loadSettings().dropboxFolderPath;

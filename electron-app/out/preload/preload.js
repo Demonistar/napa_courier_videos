@@ -62,6 +62,11 @@ const api = {
      */
     testFolderPath: (path) => electron.ipcRenderer.invoke("dropbox:testFolderPath", path),
     /**
+     * Scan a Dropbox folder and return a public shareable link for every file.
+     * Existing links are reused; new ones created only when none exist.
+     */
+    generateLinks: (folderPath) => electron.ipcRenderer.invoke("dropbox:generateLinks", folderPath),
+    /**
      * Upload an image file into NAPA Admin Data/images/ and return the
      * relative path "images/<filename>" to store in the location record.
      */

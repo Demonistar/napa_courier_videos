@@ -18,13 +18,13 @@ name: Test Windows signing smoke (self-signed cert)
 # broken.  This test catches both failure modes.
 #
 # WHAT IT DOES
-#   1. Runs the same checkout / Node / npm ci / setup-components steps as
+#   1. Runs the same checkout / Node / pnpm install / setup-components steps as
 #      the production workflow.
 #   2. Creates a self-signed code-signing certificate, exports it as a PFX,
 #      and adds it to the machine Trusted Root CA store so that the /pa policy
 #      can build a trusted chain.
 #   3. Runs the EXACT same build command as build-windows.yml step 6:
-#        npm run build && electron-builder --win --publish never
+#        pnpm run build && electron-builder --win --publish never
 #      with WIN_CSC_LINK set to the PFX path and WIN_CSC_KEY_PASSWORD set to
 #      the PFX password — exercising the full electron-builder signing path.
 #   4. Runs the EXACT gate script from build-windows.yml step 7 against the
@@ -54,20 +54,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Node.js ───────────────────────────────────────────────────────────
+      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
       # Mirrors build-windows.yml step 2 exactly.
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: electron-app/package-lock.json
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       # ── 3. Install dependencies ───────────────────────────────────────────────
       # Mirrors build-windows.yml step 3 exactly.
+      # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
+      # Install from the workspace root so pnpm resolves catalog: specifiers.
       - name: Install dependencies
-        working-directory: electron-app
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # ── 4. Copy shared components ─────────────────────────────────────────────
       # Mirrors build-windows.yml step 5 exactly.
@@ -156,7 +160,7 @@ jobs:
           WIN_CSC_LINK: ${{ steps.create-cert.outputs.PFX_PATH }}
           WIN_CSC_KEY_PASSWORD: ${{ steps.create-cert.outputs.PFX_PASSWORD }}
           DROPBOX_APP_KEY: "smoke-test-placeholder"
-        run: npm run build && electron-builder --win --publish never
+        run: pnpm run build && electron-builder --win --publish never
 
       # ── 7. Run the gate script — expect it to PASS ───────────────────────────
       #

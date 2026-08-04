@@ -14228,7 +14228,28 @@ var Title = ToastTitle$1;
 var Description = ToastDescription$1;
 var Action$1 = ToastAction$1;
 var Close = ToastClose$1;
+const concatArrays = (array1, array2) => {
+  const combinedArray = new Array(array1.length + array2.length);
+  for (let i2 = 0; i2 < array1.length; i2++) {
+    combinedArray[i2] = array1[i2];
+  }
+  for (let i2 = 0; i2 < array2.length; i2++) {
+    combinedArray[array1.length + i2] = array2[i2];
+  }
+  return combinedArray;
+};
+const createClassValidatorObject = (classGroupId, validator) => ({
+  classGroupId,
+  validator
+});
+const createClassPartObject = (nextPart = /* @__PURE__ */ new Map(), validators = null, classGroupId) => ({
+  nextPart,
+  validators,
+  classGroupId
+});
 const CLASS_PART_SEPARATOR = "-";
+const EMPTY_CONFLICTS = [];
+const ARBITRARY_PROPERTY_PREFIX = "arbitrary..";
 const createClassGroupUtils = (config) => {
   const classMap = createClassMap(config);
   const {
@@ -14236,121 +14257,134 @@ const createClassGroupUtils = (config) => {
     conflictingClassGroupModifiers
   } = config;
   const getClassGroupId = (className) => {
-    const classParts = className.split(CLASS_PART_SEPARATOR);
-    if (classParts[0] === "" && classParts.length !== 1) {
-      classParts.shift();
+    if (className.startsWith("[") && className.endsWith("]")) {
+      return getGroupIdForArbitraryProperty(className);
     }
-    return getGroupRecursive(classParts, classMap) || getGroupIdForArbitraryProperty(className);
+    const classParts = className.split(CLASS_PART_SEPARATOR);
+    const startIndex = classParts[0] === "" && classParts.length > 1 ? 1 : 0;
+    return getGroupRecursive(classParts, startIndex, classMap);
   };
   const getConflictingClassGroupIds = (classGroupId, hasPostfixModifier) => {
-    const conflicts = conflictingClassGroups[classGroupId] || [];
-    if (hasPostfixModifier && conflictingClassGroupModifiers[classGroupId]) {
-      return [...conflicts, ...conflictingClassGroupModifiers[classGroupId]];
+    if (hasPostfixModifier) {
+      const modifierConflicts = conflictingClassGroupModifiers[classGroupId];
+      const baseConflicts = conflictingClassGroups[classGroupId];
+      if (modifierConflicts) {
+        if (baseConflicts) {
+          return concatArrays(baseConflicts, modifierConflicts);
+        }
+        return modifierConflicts;
+      }
+      return baseConflicts || EMPTY_CONFLICTS;
     }
-    return conflicts;
+    return conflictingClassGroups[classGroupId] || EMPTY_CONFLICTS;
   };
   return {
     getClassGroupId,
     getConflictingClassGroupIds
   };
 };
-const getGroupRecursive = (classParts, classPartObject) => {
-  if (classParts.length === 0) {
+const getGroupRecursive = (classParts, startIndex, classPartObject) => {
+  const classPathsLength = classParts.length - startIndex;
+  if (classPathsLength === 0) {
     return classPartObject.classGroupId;
   }
-  const currentClassPart = classParts[0];
+  const currentClassPart = classParts[startIndex];
   const nextClassPartObject = classPartObject.nextPart.get(currentClassPart);
-  const classGroupFromNextClassPart = nextClassPartObject ? getGroupRecursive(classParts.slice(1), nextClassPartObject) : void 0;
-  if (classGroupFromNextClassPart) {
-    return classGroupFromNextClassPart;
+  if (nextClassPartObject) {
+    const result = getGroupRecursive(classParts, startIndex + 1, nextClassPartObject);
+    if (result) return result;
   }
-  if (classPartObject.validators.length === 0) {
+  const validators = classPartObject.validators;
+  if (validators === null) {
     return void 0;
   }
-  const classRest = classParts.join(CLASS_PART_SEPARATOR);
-  return classPartObject.validators.find(({
-    validator
-  }) => validator(classRest))?.classGroupId;
-};
-const arbitraryPropertyRegex = /^\[(.+)\]$/;
-const getGroupIdForArbitraryProperty = (className) => {
-  if (arbitraryPropertyRegex.test(className)) {
-    const arbitraryPropertyClassName = arbitraryPropertyRegex.exec(className)[1];
-    const property = arbitraryPropertyClassName?.substring(0, arbitraryPropertyClassName.indexOf(":"));
-    if (property) {
-      return "arbitrary.." + property;
+  const classRest = startIndex === 0 ? classParts.join(CLASS_PART_SEPARATOR) : classParts.slice(startIndex).join(CLASS_PART_SEPARATOR);
+  const validatorsLength = validators.length;
+  for (let i2 = 0; i2 < validatorsLength; i2++) {
+    const validatorObj = validators[i2];
+    if (validatorObj.validator(classRest)) {
+      return validatorObj.classGroupId;
     }
   }
+  return void 0;
 };
+const getGroupIdForArbitraryProperty = (className) => className.slice(1, -1).indexOf(":") === -1 ? void 0 : (() => {
+  const content = className.slice(1, -1);
+  const colonIndex = content.indexOf(":");
+  const property = content.slice(0, colonIndex);
+  return property ? ARBITRARY_PROPERTY_PREFIX + property : void 0;
+})();
 const createClassMap = (config) => {
   const {
     theme,
-    prefix
+    classGroups
   } = config;
-  const classMap = {
-    nextPart: /* @__PURE__ */ new Map(),
-    validators: []
-  };
-  const prefixedClassGroupEntries = getPrefixedClassGroupEntries(Object.entries(config.classGroups), prefix);
-  prefixedClassGroupEntries.forEach(([classGroupId, classGroup]) => {
-    processClassesRecursively(classGroup, classMap, classGroupId, theme);
-  });
+  return processClassGroups(classGroups, theme);
+};
+const processClassGroups = (classGroups, theme) => {
+  const classMap = createClassPartObject();
+  for (const classGroupId in classGroups) {
+    const group = classGroups[classGroupId];
+    processClassesRecursively(group, classMap, classGroupId, theme);
+  }
   return classMap;
 };
 const processClassesRecursively = (classGroup, classPartObject, classGroupId, theme) => {
-  classGroup.forEach((classDefinition) => {
-    if (typeof classDefinition === "string") {
-      const classPartObjectToEdit = classDefinition === "" ? classPartObject : getPart(classPartObject, classDefinition);
-      classPartObjectToEdit.classGroupId = classGroupId;
-      return;
-    }
-    if (typeof classDefinition === "function") {
-      if (isThemeGetter(classDefinition)) {
-        processClassesRecursively(classDefinition(theme), classPartObject, classGroupId, theme);
-        return;
-      }
-      classPartObject.validators.push({
-        validator: classDefinition,
-        classGroupId
-      });
-      return;
-    }
-    Object.entries(classDefinition).forEach(([key, classGroup2]) => {
-      processClassesRecursively(classGroup2, getPart(classPartObject, key), classGroupId, theme);
-    });
-  });
+  const len = classGroup.length;
+  for (let i2 = 0; i2 < len; i2++) {
+    const classDefinition = classGroup[i2];
+    processClassDefinition(classDefinition, classPartObject, classGroupId, theme);
+  }
+};
+const processClassDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  if (typeof classDefinition === "string") {
+    processStringDefinition(classDefinition, classPartObject, classGroupId);
+    return;
+  }
+  if (typeof classDefinition === "function") {
+    processFunctionDefinition(classDefinition, classPartObject, classGroupId, theme);
+    return;
+  }
+  processObjectDefinition(classDefinition, classPartObject, classGroupId, theme);
+};
+const processStringDefinition = (classDefinition, classPartObject, classGroupId) => {
+  const classPartObjectToEdit = classDefinition === "" ? classPartObject : getPart(classPartObject, classDefinition);
+  classPartObjectToEdit.classGroupId = classGroupId;
+};
+const processFunctionDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  if (isThemeGetter(classDefinition)) {
+    processClassesRecursively(classDefinition(theme), classPartObject, classGroupId, theme);
+    return;
+  }
+  if (classPartObject.validators === null) {
+    classPartObject.validators = [];
+  }
+  classPartObject.validators.push(createClassValidatorObject(classGroupId, classDefinition));
+};
+const processObjectDefinition = (classDefinition, classPartObject, classGroupId, theme) => {
+  const entries = Object.entries(classDefinition);
+  const len = entries.length;
+  for (let i2 = 0; i2 < len; i2++) {
+    const [key, value] = entries[i2];
+    processClassesRecursively(value, getPart(classPartObject, key), classGroupId, theme);
+  }
 };
 const getPart = (classPartObject, path) => {
-  let currentClassPartObject = classPartObject;
-  path.split(CLASS_PART_SEPARATOR).forEach((pathPart) => {
-    if (!currentClassPartObject.nextPart.has(pathPart)) {
-      currentClassPartObject.nextPart.set(pathPart, {
-        nextPart: /* @__PURE__ */ new Map(),
-        validators: []
-      });
+  let current = classPartObject;
+  const parts = path.split(CLASS_PART_SEPARATOR);
+  const len = parts.length;
+  for (let i2 = 0; i2 < len; i2++) {
+    const part = parts[i2];
+    let next = current.nextPart.get(part);
+    if (!next) {
+      next = createClassPartObject();
+      current.nextPart.set(part, next);
     }
-    currentClassPartObject = currentClassPartObject.nextPart.get(pathPart);
-  });
-  return currentClassPartObject;
-};
-const isThemeGetter = (func) => func.isThemeGetter;
-const getPrefixedClassGroupEntries = (classGroupEntries, prefix) => {
-  if (!prefix) {
-    return classGroupEntries;
+    current = next;
   }
-  return classGroupEntries.map(([classGroupId, classGroup]) => {
-    const prefixedClassGroup = classGroup.map((classDefinition) => {
-      if (typeof classDefinition === "string") {
-        return prefix + classDefinition;
-      }
-      if (typeof classDefinition === "object") {
-        return Object.fromEntries(Object.entries(classDefinition).map(([key, value]) => [prefix + key, value]));
-      }
-      return classDefinition;
-    });
-    return [classGroupId, prefixedClassGroup];
-  });
+  return current;
 };
+const isThemeGetter = (func) => "isThemeGetter" in func && func.isThemeGetter === true;
 const createLruCache = (maxCacheSize) => {
   if (maxCacheSize < 1) {
     return {
@@ -14360,31 +14394,31 @@ const createLruCache = (maxCacheSize) => {
     };
   }
   let cacheSize = 0;
-  let cache = /* @__PURE__ */ new Map();
-  let previousCache = /* @__PURE__ */ new Map();
+  let cache = /* @__PURE__ */ Object.create(null);
+  let previousCache = /* @__PURE__ */ Object.create(null);
   const update = (key, value) => {
-    cache.set(key, value);
+    cache[key] = value;
     cacheSize++;
     if (cacheSize > maxCacheSize) {
       cacheSize = 0;
       previousCache = cache;
-      cache = /* @__PURE__ */ new Map();
+      cache = /* @__PURE__ */ Object.create(null);
     }
   };
   return {
     get(key) {
-      let value = cache.get(key);
+      let value = cache[key];
       if (value !== void 0) {
         return value;
       }
-      if ((value = previousCache.get(key)) !== void 0) {
+      if ((value = previousCache[key]) !== void 0) {
         update(key, value);
         return value;
       }
     },
     set(key, value) {
-      if (cache.has(key)) {
-        cache.set(key, value);
+      if (key in cache) {
+        cache[key] = value;
       } else {
         update(key, value);
       }
@@ -14392,25 +14426,33 @@ const createLruCache = (maxCacheSize) => {
   };
 };
 const IMPORTANT_MODIFIER = "!";
+const MODIFIER_SEPARATOR = ":";
+const EMPTY_MODIFIERS = [];
+const createResultObject = (modifiers, hasImportantModifier, baseClassName, maybePostfixModifierPosition, isExternal) => ({
+  modifiers,
+  hasImportantModifier,
+  baseClassName,
+  maybePostfixModifierPosition,
+  isExternal
+});
 const createParseClassName = (config) => {
   const {
-    separator,
+    prefix,
     experimentalParseClassName
   } = config;
-  const isSeparatorSingleCharacter = separator.length === 1;
-  const firstSeparatorCharacter = separator[0];
-  const separatorLength = separator.length;
-  const parseClassName = (className) => {
+  let parseClassName = (className) => {
     const modifiers = [];
     let bracketDepth = 0;
+    let parenDepth = 0;
     let modifierStart = 0;
     let postfixModifierPosition;
-    for (let index2 = 0; index2 < className.length; index2++) {
-      let currentCharacter = className[index2];
-      if (bracketDepth === 0) {
-        if (currentCharacter === firstSeparatorCharacter && (isSeparatorSingleCharacter || className.slice(index2, index2 + separatorLength) === separator)) {
+    const len = className.length;
+    for (let index2 = 0; index2 < len; index2++) {
+      const currentCharacter = className[index2];
+      if (bracketDepth === 0 && parenDepth === 0) {
+        if (currentCharacter === MODIFIER_SEPARATOR) {
           modifiers.push(className.slice(modifierStart, index2));
-          modifierStart = index2 + separatorLength;
+          modifierStart = index2 + 1;
           continue;
         }
         if (currentCharacter === "/") {
@@ -14418,60 +14460,99 @@ const createParseClassName = (config) => {
           continue;
         }
       }
-      if (currentCharacter === "[") {
-        bracketDepth++;
-      } else if (currentCharacter === "]") {
-        bracketDepth--;
-      }
+      if (currentCharacter === "[") bracketDepth++;
+      else if (currentCharacter === "]") bracketDepth--;
+      else if (currentCharacter === "(") parenDepth++;
+      else if (currentCharacter === ")") parenDepth--;
     }
-    const baseClassNameWithImportantModifier = modifiers.length === 0 ? className : className.substring(modifierStart);
-    const hasImportantModifier = baseClassNameWithImportantModifier.startsWith(IMPORTANT_MODIFIER);
-    const baseClassName = hasImportantModifier ? baseClassNameWithImportantModifier.substring(1) : baseClassNameWithImportantModifier;
+    const baseClassNameWithImportantModifier = modifiers.length === 0 ? className : className.slice(modifierStart);
+    let baseClassName = baseClassNameWithImportantModifier;
+    let hasImportantModifier = false;
+    if (baseClassNameWithImportantModifier.endsWith(IMPORTANT_MODIFIER)) {
+      baseClassName = baseClassNameWithImportantModifier.slice(0, -1);
+      hasImportantModifier = true;
+    } else if (
+      /**
+       * In Tailwind CSS v3 the important modifier was at the start of the base class name. This is still supported for legacy reasons.
+       * @see https://github.com/dcastil/tailwind-merge/issues/513#issuecomment-2614029864
+       */
+      baseClassNameWithImportantModifier.startsWith(IMPORTANT_MODIFIER)
+    ) {
+      baseClassName = baseClassNameWithImportantModifier.slice(1);
+      hasImportantModifier = true;
+    }
     const maybePostfixModifierPosition = postfixModifierPosition && postfixModifierPosition > modifierStart ? postfixModifierPosition - modifierStart : void 0;
-    return {
-      modifiers,
-      hasImportantModifier,
-      baseClassName,
-      maybePostfixModifierPosition
-    };
+    return createResultObject(modifiers, hasImportantModifier, baseClassName, maybePostfixModifierPosition);
   };
+  if (prefix) {
+    const fullPrefix = prefix + MODIFIER_SEPARATOR;
+    const parseClassNameOriginal = parseClassName;
+    parseClassName = (className) => className.startsWith(fullPrefix) ? parseClassNameOriginal(className.slice(fullPrefix.length)) : createResultObject(EMPTY_MODIFIERS, false, className, void 0, true);
+  }
   if (experimentalParseClassName) {
-    return (className) => experimentalParseClassName({
+    const parseClassNameOriginal = parseClassName;
+    parseClassName = (className) => experimentalParseClassName({
       className,
-      parseClassName
+      parseClassName: parseClassNameOriginal
     });
   }
   return parseClassName;
 };
-const sortModifiers = (modifiers) => {
-  if (modifiers.length <= 1) {
-    return modifiers;
-  }
-  const sortedModifiers = [];
-  let unsortedModifiers = [];
-  modifiers.forEach((modifier) => {
-    const isArbitraryVariant = modifier[0] === "[";
-    if (isArbitraryVariant) {
-      sortedModifiers.push(...unsortedModifiers.sort(), modifier);
-      unsortedModifiers = [];
-    } else {
-      unsortedModifiers.push(modifier);
-    }
+const createSortModifiers = (config) => {
+  const modifierWeights = /* @__PURE__ */ new Map();
+  config.orderSensitiveModifiers.forEach((mod, index2) => {
+    modifierWeights.set(mod, 1e6 + index2);
   });
-  sortedModifiers.push(...unsortedModifiers.sort());
-  return sortedModifiers;
+  return (modifiers) => {
+    const result = [];
+    let currentSegment = [];
+    for (let i2 = 0; i2 < modifiers.length; i2++) {
+      const modifier = modifiers[i2];
+      const isArbitrary = modifier[0] === "[";
+      const isOrderSensitive = modifierWeights.has(modifier);
+      if (isArbitrary || isOrderSensitive) {
+        if (currentSegment.length > 0) {
+          currentSegment.sort();
+          result.push(...currentSegment);
+          currentSegment = [];
+        }
+        result.push(modifier);
+      } else {
+        currentSegment.push(modifier);
+      }
+    }
+    if (currentSegment.length > 0) {
+      currentSegment.sort();
+      result.push(...currentSegment);
+    }
+    return result;
+  };
 };
 const createConfigUtils = (config) => ({
   cache: createLruCache(config.cacheSize),
   parseClassName: createParseClassName(config),
+  sortModifiers: createSortModifiers(config),
+  postfixLookupClassGroupIds: createPostfixLookupClassGroupIds(config),
   ...createClassGroupUtils(config)
 });
+const createPostfixLookupClassGroupIds = (config) => {
+  const lookup = /* @__PURE__ */ Object.create(null);
+  const classGroupIds = config.postfixLookupClassGroups;
+  if (classGroupIds) {
+    for (let i2 = 0; i2 < classGroupIds.length; i2++) {
+      lookup[classGroupIds[i2]] = true;
+    }
+  }
+  return lookup;
+};
 const SPLIT_CLASSES_REGEX = /\s+/;
 const mergeClassList = (classList, configUtils) => {
   const {
     parseClassName,
     getClassGroupId,
-    getConflictingClassGroupIds
+    getConflictingClassGroupIds,
+    sortModifiers,
+    postfixLookupClassGroupIds
   } = configUtils;
   const classGroupsInConflict = [];
   const classNames = classList.trim().split(SPLIT_CLASSES_REGEX);
@@ -14479,13 +14560,29 @@ const mergeClassList = (classList, configUtils) => {
   for (let index2 = classNames.length - 1; index2 >= 0; index2 -= 1) {
     const originalClassName = classNames[index2];
     const {
+      isExternal,
       modifiers,
       hasImportantModifier,
       baseClassName,
       maybePostfixModifierPosition
     } = parseClassName(originalClassName);
-    let hasPostfixModifier = Boolean(maybePostfixModifierPosition);
-    let classGroupId = getClassGroupId(hasPostfixModifier ? baseClassName.substring(0, maybePostfixModifierPosition) : baseClassName);
+    if (isExternal) {
+      result = originalClassName + (result.length > 0 ? " " + result : result);
+      continue;
+    }
+    let hasPostfixModifier = !!maybePostfixModifierPosition;
+    let classGroupId;
+    if (hasPostfixModifier) {
+      const baseClassNameWithoutPostfix = baseClassName.substring(0, maybePostfixModifierPosition);
+      classGroupId = getClassGroupId(baseClassNameWithoutPostfix);
+      const classGroupIdWithPostfix = classGroupId && postfixLookupClassGroupIds[classGroupId] ? getClassGroupId(baseClassName) : void 0;
+      if (classGroupIdWithPostfix && classGroupIdWithPostfix !== classGroupId) {
+        classGroupId = classGroupIdWithPostfix;
+        hasPostfixModifier = false;
+      }
+    } else {
+      classGroupId = getClassGroupId(baseClassName);
+    }
     if (!classGroupId) {
       if (!hasPostfixModifier) {
         result = originalClassName + (result.length > 0 ? " " + result : result);
@@ -14498,10 +14595,10 @@ const mergeClassList = (classList, configUtils) => {
       }
       hasPostfixModifier = false;
     }
-    const variantModifier = sortModifiers(modifiers).join(":");
+    const variantModifier = modifiers.length === 0 ? "" : modifiers.length === 1 ? modifiers[0] : sortModifiers(modifiers).join(":");
     const modifierId = hasImportantModifier ? variantModifier + IMPORTANT_MODIFIER : variantModifier;
     const classId = modifierId + classGroupId;
-    if (classGroupsInConflict.includes(classId)) {
+    if (classGroupsInConflict.indexOf(classId) > -1) {
       continue;
     }
     classGroupsInConflict.push(classId);
@@ -14514,13 +14611,13 @@ const mergeClassList = (classList, configUtils) => {
   }
   return result;
 };
-function twJoin() {
+const twJoin = (...classLists) => {
   let index2 = 0;
   let argument;
   let resolvedValue;
   let string = "";
-  while (index2 < arguments.length) {
-    if (argument = arguments[index2++]) {
+  while (index2 < classLists.length) {
+    if (argument = classLists[index2++]) {
       if (resolvedValue = toValue(argument)) {
         string && (string += " ");
         string += resolvedValue;
@@ -14528,7 +14625,7 @@ function twJoin() {
     }
   }
   return string;
-}
+};
 const toValue = (mix) => {
   if (typeof mix === "string") {
     return mix;
@@ -14545,20 +14642,20 @@ const toValue = (mix) => {
   }
   return string;
 };
-function createTailwindMerge(createConfigFirst, ...createConfigRest) {
+const createTailwindMerge = (createConfigFirst, ...createConfigRest) => {
   let configUtils;
   let cacheGet;
   let cacheSet;
-  let functionToCall = initTailwindMerge;
-  function initTailwindMerge(classList) {
+  let functionToCall;
+  const initTailwindMerge = (classList) => {
     const config = createConfigRest.reduce((previousConfig, createConfigCurrent) => createConfigCurrent(previousConfig), createConfigFirst());
     configUtils = createConfigUtils(config);
     cacheGet = configUtils.cache.get;
     cacheSet = configUtils.cache.set;
     functionToCall = tailwindMerge;
     return tailwindMerge(classList);
-  }
-  function tailwindMerge(classList) {
+  };
+  const tailwindMerge = (classList) => {
     const cachedResult = cacheGet(classList);
     if (cachedResult) {
       return cachedResult;
@@ -14566,49 +14663,30 @@ function createTailwindMerge(createConfigFirst, ...createConfigRest) {
     const result = mergeClassList(classList, configUtils);
     cacheSet(classList, result);
     return result;
-  }
-  return function callTailwindMerge() {
-    return functionToCall(twJoin.apply(null, arguments));
   };
-}
+  functionToCall = initTailwindMerge;
+  return (...args) => functionToCall(twJoin(...args));
+};
+const fallbackThemeArr = [];
 const fromTheme = (key) => {
-  const themeGetter = (theme) => theme[key] || [];
+  const themeGetter = (theme) => theme[key] || fallbackThemeArr;
   themeGetter.isThemeGetter = true;
   return themeGetter;
 };
-const arbitraryValueRegex = /^\[(?:([a-z-]+):)?(.+)\]$/i;
-const fractionRegex = /^\d+\/\d+$/;
-const stringLengths = /* @__PURE__ */ new Set(["px", "full", "screen"]);
+const arbitraryValueRegex = /^\[(?:(\w[\w-]*):)?(.+)\]$/i;
+const arbitraryVariableRegex = /^\((?:(\w[\w-]*):)?(.+)\)$/i;
+const fractionRegex = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?$/;
 const tshirtUnitRegex = /^(\d+(\.\d+)?)?(xs|sm|md|lg|xl)$/;
 const lengthUnitRegex = /\d+(%|px|r?em|[sdl]?v([hwib]|min|max)|pt|pc|in|cm|mm|cap|ch|ex|r?lh|cq(w|h|i|b|min|max))|\b(calc|min|max|clamp)\(.+\)|^0$/;
 const colorFunctionRegex = /^(rgba?|hsla?|hwb|(ok)?(lab|lch)|color-mix)\(.+\)$/;
 const shadowRegex = /^(inset_)?-?((\d+)?\.?(\d+)[a-z]+|0)_-?((\d+)?\.?(\d+)[a-z]+|0)/;
 const imageRegex = /^(url|image|image-set|cross-fade|element|(repeating-)?(linear|radial|conic)-gradient)\(.+\)$/;
-const isLength = (value) => isNumber$1(value) || stringLengths.has(value) || fractionRegex.test(value);
-const isArbitraryLength = (value) => getIsArbitraryValue(value, "length", isLengthOnly);
-const isNumber$1 = (value) => Boolean(value) && !Number.isNaN(Number(value));
-const isArbitraryNumber = (value) => getIsArbitraryValue(value, "number", isNumber$1);
-const isInteger = (value) => Boolean(value) && Number.isInteger(Number(value));
+const isFraction = (value) => fractionRegex.test(value);
+const isNumber$1 = (value) => !!value && !Number.isNaN(Number(value));
+const isInteger = (value) => !!value && Number.isInteger(Number(value));
 const isPercent = (value) => value.endsWith("%") && isNumber$1(value.slice(0, -1));
-const isArbitraryValue = (value) => arbitraryValueRegex.test(value);
 const isTshirtSize = (value) => tshirtUnitRegex.test(value);
-const sizeLabels = /* @__PURE__ */ new Set(["length", "size", "percentage"]);
-const isArbitrarySize = (value) => getIsArbitraryValue(value, sizeLabels, isNever);
-const isArbitraryPosition = (value) => getIsArbitraryValue(value, "position", isNever);
-const imageLabels = /* @__PURE__ */ new Set(["image", "url"]);
-const isArbitraryImage = (value) => getIsArbitraryValue(value, imageLabels, isImage);
-const isArbitraryShadow = (value) => getIsArbitraryValue(value, "", isShadow);
 const isAny = () => true;
-const getIsArbitraryValue = (value, label, testValue) => {
-  const result = arbitraryValueRegex.exec(value);
-  if (result) {
-    if (result[1]) {
-      return typeof label === "string" ? result[1] === label : label.has(result[1]);
-    }
-    return testValue(result[2]);
-  }
-  return false;
-};
 const isLengthOnly = (value) => (
   // `colorFunctionRegex` check is necessary because color functions can have percentages in them which which would be incorrectly classified as lengths.
   // For example, `hsl(0 0% 0%)` would be classified as a length without this check.
@@ -14618,109 +14696,218 @@ const isLengthOnly = (value) => (
 const isNever = () => false;
 const isShadow = (value) => shadowRegex.test(value);
 const isImage = (value) => imageRegex.test(value);
+const isAnyNonArbitrary = (value) => !isArbitraryValue(value) && !isArbitraryVariable(value);
+const isNamedContainerQuery = (value) => value.startsWith("@container") && (value[10] === "/" && value[11] !== void 0 || value[11] === "s" && value[16] !== void 0 && value.startsWith("-size/", 10) || value[11] === "n" && value[18] !== void 0 && value.startsWith("-normal/", 10));
+const isArbitrarySize = (value) => getIsArbitraryValue(value, isLabelSize, isNever);
+const isArbitraryValue = (value) => arbitraryValueRegex.test(value);
+const isArbitraryLength = (value) => getIsArbitraryValue(value, isLabelLength, isLengthOnly);
+const isArbitraryNumber = (value) => getIsArbitraryValue(value, isLabelNumber, isNumber$1);
+const isArbitraryWeight = (value) => getIsArbitraryValue(value, isLabelWeight, isAny);
+const isArbitraryFamilyName = (value) => getIsArbitraryValue(value, isLabelFamilyName, isNever);
+const isArbitraryPosition = (value) => getIsArbitraryValue(value, isLabelPosition, isNever);
+const isArbitraryImage = (value) => getIsArbitraryValue(value, isLabelImage, isImage);
+const isArbitraryShadow = (value) => getIsArbitraryValue(value, isLabelShadow, isShadow);
+const isArbitraryVariable = (value) => arbitraryVariableRegex.test(value);
+const isArbitraryVariableLength = (value) => getIsArbitraryVariable(value, isLabelLength);
+const isArbitraryVariableFamilyName = (value) => getIsArbitraryVariable(value, isLabelFamilyName);
+const isArbitraryVariablePosition = (value) => getIsArbitraryVariable(value, isLabelPosition);
+const isArbitraryVariableSize = (value) => getIsArbitraryVariable(value, isLabelSize);
+const isArbitraryVariableImage = (value) => getIsArbitraryVariable(value, isLabelImage);
+const isArbitraryVariableShadow = (value) => getIsArbitraryVariable(value, isLabelShadow, true);
+const isArbitraryVariableWeight = (value) => getIsArbitraryVariable(value, isLabelWeight, true);
+const getIsArbitraryValue = (value, testLabel, testValue) => {
+  const result = arbitraryValueRegex.exec(value);
+  if (result) {
+    if (result[1]) {
+      return testLabel(result[1]);
+    }
+    return testValue(result[2]);
+  }
+  return false;
+};
+const getIsArbitraryVariable = (value, testLabel, shouldMatchNoLabel = false) => {
+  const result = arbitraryVariableRegex.exec(value);
+  if (result) {
+    if (result[1]) {
+      return testLabel(result[1]);
+    }
+    return shouldMatchNoLabel;
+  }
+  return false;
+};
+const isLabelPosition = (label) => label === "position" || label === "percentage";
+const isLabelImage = (label) => label === "image" || label === "url";
+const isLabelSize = (label) => label === "length" || label === "size" || label === "bg-size";
+const isLabelLength = (label) => label === "length";
+const isLabelNumber = (label) => label === "number";
+const isLabelFamilyName = (label) => label === "family-name";
+const isLabelWeight = (label) => label === "number" || label === "weight";
+const isLabelShadow = (label) => label === "shadow";
 const getDefaultConfig = () => {
-  const colors = fromTheme("colors");
-  const spacing = fromTheme("spacing");
-  const blur = fromTheme("blur");
-  const brightness = fromTheme("brightness");
-  const borderColor = fromTheme("borderColor");
-  const borderRadius = fromTheme("borderRadius");
-  const borderSpacing = fromTheme("borderSpacing");
-  const borderWidth = fromTheme("borderWidth");
-  const contrast = fromTheme("contrast");
-  const grayscale = fromTheme("grayscale");
-  const hueRotate = fromTheme("hueRotate");
-  const invert = fromTheme("invert");
-  const gap = fromTheme("gap");
-  const gradientColorStops = fromTheme("gradientColorStops");
-  const gradientColorStopPositions = fromTheme("gradientColorStopPositions");
-  const inset = fromTheme("inset");
-  const margin = fromTheme("margin");
-  const opacity = fromTheme("opacity");
-  const padding = fromTheme("padding");
-  const saturate = fromTheme("saturate");
-  const scale = fromTheme("scale");
-  const sepia = fromTheme("sepia");
-  const skew = fromTheme("skew");
-  const space = fromTheme("space");
-  const translate = fromTheme("translate");
-  const getOverscroll = () => ["auto", "contain", "none"];
-  const getOverflow = () => ["auto", "hidden", "clip", "visible", "scroll"];
-  const getSpacingWithAutoAndArbitrary = () => ["auto", isArbitraryValue, spacing];
-  const getSpacingWithArbitrary = () => [isArbitraryValue, spacing];
-  const getLengthWithEmptyAndArbitrary = () => ["", isLength, isArbitraryLength];
-  const getNumberWithAutoAndArbitrary = () => ["auto", isNumber$1, isArbitraryValue];
-  const getPositions = () => ["bottom", "center", "left", "left-bottom", "left-top", "right", "right-bottom", "right-top", "top"];
-  const getLineStyles = () => ["solid", "dashed", "dotted", "double", "none"];
-  const getBlendModes = () => ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"];
-  const getAlign = () => ["start", "end", "center", "between", "around", "evenly", "stretch"];
-  const getZeroAndEmpty = () => ["", "0", isArbitraryValue];
-  const getBreaks = () => ["auto", "avoid", "all", "avoid-page", "page", "left", "right", "column"];
-  const getNumberAndArbitrary = () => [isNumber$1, isArbitraryValue];
+  const themeColor = fromTheme("color");
+  const themeFont = fromTheme("font");
+  const themeText = fromTheme("text");
+  const themeFontWeight = fromTheme("font-weight");
+  const themeTracking = fromTheme("tracking");
+  const themeLeading = fromTheme("leading");
+  const themeBreakpoint = fromTheme("breakpoint");
+  const themeContainer = fromTheme("container");
+  const themeSpacing = fromTheme("spacing");
+  const themeRadius = fromTheme("radius");
+  const themeShadow = fromTheme("shadow");
+  const themeInsetShadow = fromTheme("inset-shadow");
+  const themeTextShadow = fromTheme("text-shadow");
+  const themeDropShadow = fromTheme("drop-shadow");
+  const themeBlur = fromTheme("blur");
+  const themePerspective = fromTheme("perspective");
+  const themeAspect = fromTheme("aspect");
+  const themeEase = fromTheme("ease");
+  const themeAnimate = fromTheme("animate");
+  const scaleBreak = () => ["auto", "avoid", "all", "avoid-page", "page", "left", "right", "column"];
+  const scalePosition = () => [
+    "center",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "top-left",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "left-top",
+    "top-right",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "right-top",
+    "bottom-right",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "right-bottom",
+    "bottom-left",
+    // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
+    "left-bottom"
+  ];
+  const scalePositionWithArbitrary = () => [...scalePosition(), isArbitraryVariable, isArbitraryValue];
+  const scaleOverflow = () => ["auto", "hidden", "clip", "visible", "scroll"];
+  const scaleOverscroll = () => ["auto", "contain", "none"];
+  const scaleUnambiguousSpacing = () => [isArbitraryVariable, isArbitraryValue, themeSpacing];
+  const scaleInset = () => [isFraction, "full", "auto", ...scaleUnambiguousSpacing()];
+  const scaleGridTemplateColsRows = () => [isInteger, "none", "subgrid", isArbitraryVariable, isArbitraryValue];
+  const scaleGridColRowStartAndEnd = () => ["auto", {
+    span: ["full", isInteger, isArbitraryVariable, isArbitraryValue]
+  }, isInteger, isArbitraryVariable, isArbitraryValue];
+  const scaleGridColRowStartOrEnd = () => [isInteger, "auto", isArbitraryVariable, isArbitraryValue];
+  const scaleGridAutoColsRows = () => ["auto", "min", "max", "fr", isArbitraryVariable, isArbitraryValue];
+  const scaleAlignPrimaryAxis = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"];
+  const scaleAlignSecondaryAxis = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"];
+  const scaleMargin = () => ["auto", ...scaleUnambiguousSpacing()];
+  const scaleSizing = () => [isFraction, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleSizingInline = () => [isFraction, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleSizingBlock = () => [isFraction, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...scaleUnambiguousSpacing()];
+  const scaleColor = () => [themeColor, isArbitraryVariable, isArbitraryValue];
+  const scaleBgPosition = () => [...scalePosition(), isArbitraryVariablePosition, isArbitraryPosition, {
+    position: [isArbitraryVariable, isArbitraryValue]
+  }];
+  const scaleBgRepeat = () => ["no-repeat", {
+    repeat: ["", "x", "y", "space", "round"]
+  }];
+  const scaleBgSize = () => ["auto", "cover", "contain", isArbitraryVariableSize, isArbitrarySize, {
+    size: [isArbitraryVariable, isArbitraryValue]
+  }];
+  const scaleGradientStopPosition = () => [isPercent, isArbitraryVariableLength, isArbitraryLength];
+  const scaleRadius = () => [
+    // Deprecated since Tailwind CSS v4.0.0
+    "",
+    "none",
+    "full",
+    themeRadius,
+    isArbitraryVariable,
+    isArbitraryValue
+  ];
+  const scaleBorderWidth = () => ["", isNumber$1, isArbitraryVariableLength, isArbitraryLength];
+  const scaleLineStyle = () => ["solid", "dashed", "dotted", "double"];
+  const scaleBlendMode = () => ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"];
+  const scaleMaskImagePosition = () => [isNumber$1, isPercent, isArbitraryVariablePosition, isArbitraryPosition];
+  const scaleBlur = () => [
+    // Deprecated since Tailwind CSS v4.0.0
+    "",
+    "none",
+    themeBlur,
+    isArbitraryVariable,
+    isArbitraryValue
+  ];
+  const scaleRotate = () => ["none", isNumber$1, isArbitraryVariable, isArbitraryValue];
+  const scaleScale = () => ["none", isNumber$1, isArbitraryVariable, isArbitraryValue];
+  const scaleSkew = () => [isNumber$1, isArbitraryVariable, isArbitraryValue];
+  const scaleTranslate = () => [isFraction, "full", ...scaleUnambiguousSpacing()];
   return {
     cacheSize: 500,
-    separator: ":",
     theme: {
-      colors: [isAny],
-      spacing: [isLength, isArbitraryLength],
-      blur: ["none", "", isTshirtSize, isArbitraryValue],
-      brightness: getNumberAndArbitrary(),
-      borderColor: [colors],
-      borderRadius: ["none", "", "full", isTshirtSize, isArbitraryValue],
-      borderSpacing: getSpacingWithArbitrary(),
-      borderWidth: getLengthWithEmptyAndArbitrary(),
-      contrast: getNumberAndArbitrary(),
-      grayscale: getZeroAndEmpty(),
-      hueRotate: getNumberAndArbitrary(),
-      invert: getZeroAndEmpty(),
-      gap: getSpacingWithArbitrary(),
-      gradientColorStops: [colors],
-      gradientColorStopPositions: [isPercent, isArbitraryLength],
-      inset: getSpacingWithAutoAndArbitrary(),
-      margin: getSpacingWithAutoAndArbitrary(),
-      opacity: getNumberAndArbitrary(),
-      padding: getSpacingWithArbitrary(),
-      saturate: getNumberAndArbitrary(),
-      scale: getNumberAndArbitrary(),
-      sepia: getZeroAndEmpty(),
-      skew: getNumberAndArbitrary(),
-      space: getSpacingWithArbitrary(),
-      translate: getSpacingWithArbitrary()
+      animate: ["spin", "ping", "pulse", "bounce"],
+      aspect: ["video"],
+      blur: [isTshirtSize],
+      breakpoint: [isTshirtSize],
+      color: [isAny],
+      container: [isTshirtSize],
+      "drop-shadow": [isTshirtSize],
+      ease: ["in", "out", "in-out"],
+      font: [isAnyNonArbitrary],
+      "font-weight": ["thin", "extralight", "light", "normal", "medium", "semibold", "bold", "extrabold", "black"],
+      "inset-shadow": [isTshirtSize],
+      leading: ["none", "tight", "snug", "normal", "relaxed", "loose"],
+      perspective: ["dramatic", "near", "normal", "midrange", "distant", "none"],
+      radius: [isTshirtSize],
+      shadow: [isTshirtSize],
+      spacing: ["px", isNumber$1],
+      text: [isTshirtSize],
+      "text-shadow": [isTshirtSize],
+      tracking: ["tighter", "tight", "normal", "wide", "wider", "widest"]
     },
     classGroups: {
-      // Layout
+      // --------------
+      // --- Layout ---
+      // --------------
       /**
        * Aspect Ratio
        * @see https://tailwindcss.com/docs/aspect-ratio
        */
       aspect: [{
-        aspect: ["auto", "square", "video", isArbitraryValue]
+        aspect: ["auto", "square", isFraction, isArbitraryValue, isArbitraryVariable, themeAspect]
       }],
       /**
        * Container
        * @see https://tailwindcss.com/docs/container
+       * @deprecated since Tailwind CSS v4.0.0
        */
       container: ["container"],
+      /**
+       * Container Type
+       * @see https://tailwindcss.com/docs/responsive-design#container-queries
+       */
+      "container-type": [{
+        "@container": ["", "normal", "size", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Container Name
+       * @see https://tailwindcss.com/docs/responsive-design#named-containers
+       */
+      "container-named": [isNamedContainerQuery],
       /**
        * Columns
        * @see https://tailwindcss.com/docs/columns
        */
       columns: [{
-        columns: [isTshirtSize]
+        columns: [isNumber$1, isArbitraryValue, isArbitraryVariable, themeContainer]
       }],
       /**
        * Break After
        * @see https://tailwindcss.com/docs/break-after
        */
       "break-after": [{
-        "break-after": getBreaks()
+        "break-after": scaleBreak()
       }],
       /**
        * Break Before
        * @see https://tailwindcss.com/docs/break-before
        */
       "break-before": [{
-        "break-before": getBreaks()
+        "break-before": scaleBreak()
       }],
       /**
        * Break Inside
@@ -14748,6 +14935,11 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/display
        */
       display: ["block", "inline-block", "inline", "flex", "inline-flex", "table", "inline-table", "table-caption", "table-cell", "table-column", "table-column-group", "table-footer-group", "table-header-group", "table-row-group", "table-row", "flow-root", "grid", "inline-grid", "contents", "list-item", "hidden"],
+      /**
+       * Screen Reader Only
+       * @see https://tailwindcss.com/docs/display#screen-reader-only
+       */
+      sr: ["sr-only", "not-sr-only"],
       /**
        * Floats
        * @see https://tailwindcss.com/docs/float
@@ -14779,49 +14971,49 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/object-position
        */
       "object-position": [{
-        object: [...getPositions(), isArbitraryValue]
+        object: scalePositionWithArbitrary()
       }],
       /**
        * Overflow
        * @see https://tailwindcss.com/docs/overflow
        */
       overflow: [{
-        overflow: getOverflow()
+        overflow: scaleOverflow()
       }],
       /**
        * Overflow X
        * @see https://tailwindcss.com/docs/overflow
        */
       "overflow-x": [{
-        "overflow-x": getOverflow()
+        "overflow-x": scaleOverflow()
       }],
       /**
        * Overflow Y
        * @see https://tailwindcss.com/docs/overflow
        */
       "overflow-y": [{
-        "overflow-y": getOverflow()
+        "overflow-y": scaleOverflow()
       }],
       /**
        * Overscroll Behavior
        * @see https://tailwindcss.com/docs/overscroll-behavior
        */
       overscroll: [{
-        overscroll: getOverscroll()
+        overscroll: scaleOverscroll()
       }],
       /**
        * Overscroll Behavior X
        * @see https://tailwindcss.com/docs/overscroll-behavior
        */
       "overscroll-x": [{
-        "overscroll-x": getOverscroll()
+        "overscroll-x": scaleOverscroll()
       }],
       /**
        * Overscroll Behavior Y
        * @see https://tailwindcss.com/docs/overscroll-behavior
        */
       "overscroll-y": [{
-        "overscroll-y": getOverscroll()
+        "overscroll-y": scaleOverscroll()
       }],
       /**
        * Position
@@ -14829,67 +15021,93 @@ const getDefaultConfig = () => {
        */
       position: ["static", "fixed", "absolute", "relative", "sticky"],
       /**
-       * Top / Right / Bottom / Left
+       * Inset
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       inset: [{
-        inset: [inset]
+        inset: scaleInset()
       }],
       /**
-       * Right / Left
+       * Inset Inline
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       "inset-x": [{
-        "inset-x": [inset]
+        "inset-x": scaleInset()
       }],
       /**
-       * Top / Bottom
+       * Inset Block
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       "inset-y": [{
-        "inset-y": [inset]
+        "inset-y": scaleInset()
       }],
       /**
-       * Start
+       * Inset Inline Start
        * @see https://tailwindcss.com/docs/top-right-bottom-left
+       * @todo class group will be renamed to `inset-s` in next major release
        */
       start: [{
-        start: [inset]
+        "inset-s": scaleInset(),
+        /**
+         * @deprecated since Tailwind CSS v4.2.0 in favor of `inset-s-*` utilities.
+         * @see https://github.com/tailwindlabs/tailwindcss/pull/19613
+         */
+        start: scaleInset()
       }],
       /**
-       * End
+       * Inset Inline End
        * @see https://tailwindcss.com/docs/top-right-bottom-left
+       * @todo class group will be renamed to `inset-e` in next major release
        */
       end: [{
-        end: [inset]
+        "inset-e": scaleInset(),
+        /**
+         * @deprecated since Tailwind CSS v4.2.0 in favor of `inset-e-*` utilities.
+         * @see https://github.com/tailwindlabs/tailwindcss/pull/19613
+         */
+        end: scaleInset()
+      }],
+      /**
+       * Inset Block Start
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-bs": [{
+        "inset-bs": scaleInset()
+      }],
+      /**
+       * Inset Block End
+       * @see https://tailwindcss.com/docs/top-right-bottom-left
+       */
+      "inset-be": [{
+        "inset-be": scaleInset()
       }],
       /**
        * Top
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       top: [{
-        top: [inset]
+        top: scaleInset()
       }],
       /**
        * Right
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       right: [{
-        right: [inset]
+        right: scaleInset()
       }],
       /**
        * Bottom
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       bottom: [{
-        bottom: [inset]
+        bottom: scaleInset()
       }],
       /**
        * Left
        * @see https://tailwindcss.com/docs/top-right-bottom-left
        */
       left: [{
-        left: [inset]
+        left: scaleInset()
       }],
       /**
        * Visibility
@@ -14901,15 +15119,17 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/z-index
        */
       z: [{
-        z: ["auto", isInteger, isArbitraryValue]
+        z: [isInteger, "auto", isArbitraryVariable, isArbitraryValue]
       }],
-      // Flexbox and Grid
+      // ------------------------
+      // --- Flexbox and Grid ---
+      // ------------------------
       /**
        * Flex Basis
        * @see https://tailwindcss.com/docs/flex-basis
        */
       basis: [{
-        basis: getSpacingWithAutoAndArbitrary()
+        basis: [isFraction, "full", "auto", themeContainer, ...scaleUnambiguousSpacing()]
       }],
       /**
        * Flex Direction
@@ -14923,95 +15143,91 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/flex-wrap
        */
       "flex-wrap": [{
-        flex: ["wrap", "wrap-reverse", "nowrap"]
+        flex: ["nowrap", "wrap", "wrap-reverse"]
       }],
       /**
        * Flex
        * @see https://tailwindcss.com/docs/flex
        */
       flex: [{
-        flex: ["1", "auto", "initial", "none", isArbitraryValue]
+        flex: [isNumber$1, isFraction, "auto", "initial", "none", isArbitraryValue]
       }],
       /**
        * Flex Grow
        * @see https://tailwindcss.com/docs/flex-grow
        */
       grow: [{
-        grow: getZeroAndEmpty()
+        grow: ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Flex Shrink
        * @see https://tailwindcss.com/docs/flex-shrink
        */
       shrink: [{
-        shrink: getZeroAndEmpty()
+        shrink: ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Order
        * @see https://tailwindcss.com/docs/order
        */
       order: [{
-        order: ["first", "last", "none", isInteger, isArbitraryValue]
+        order: [isInteger, "first", "last", "none", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Grid Template Columns
        * @see https://tailwindcss.com/docs/grid-template-columns
        */
       "grid-cols": [{
-        "grid-cols": [isAny]
+        "grid-cols": scaleGridTemplateColsRows()
       }],
       /**
        * Grid Column Start / End
        * @see https://tailwindcss.com/docs/grid-column
        */
       "col-start-end": [{
-        col: ["auto", {
-          span: ["full", isInteger, isArbitraryValue]
-        }, isArbitraryValue]
+        col: scaleGridColRowStartAndEnd()
       }],
       /**
        * Grid Column Start
        * @see https://tailwindcss.com/docs/grid-column
        */
       "col-start": [{
-        "col-start": getNumberWithAutoAndArbitrary()
+        "col-start": scaleGridColRowStartOrEnd()
       }],
       /**
        * Grid Column End
        * @see https://tailwindcss.com/docs/grid-column
        */
       "col-end": [{
-        "col-end": getNumberWithAutoAndArbitrary()
+        "col-end": scaleGridColRowStartOrEnd()
       }],
       /**
        * Grid Template Rows
        * @see https://tailwindcss.com/docs/grid-template-rows
        */
       "grid-rows": [{
-        "grid-rows": [isAny]
+        "grid-rows": scaleGridTemplateColsRows()
       }],
       /**
        * Grid Row Start / End
        * @see https://tailwindcss.com/docs/grid-row
        */
       "row-start-end": [{
-        row: ["auto", {
-          span: [isInteger, isArbitraryValue]
-        }, isArbitraryValue]
+        row: scaleGridColRowStartAndEnd()
       }],
       /**
        * Grid Row Start
        * @see https://tailwindcss.com/docs/grid-row
        */
       "row-start": [{
-        "row-start": getNumberWithAutoAndArbitrary()
+        "row-start": scaleGridColRowStartOrEnd()
       }],
       /**
        * Grid Row End
        * @see https://tailwindcss.com/docs/grid-row
        */
       "row-end": [{
-        "row-end": getNumberWithAutoAndArbitrary()
+        "row-end": scaleGridColRowStartOrEnd()
       }],
       /**
        * Grid Auto Flow
@@ -15025,98 +15241,102 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/grid-auto-columns
        */
       "auto-cols": [{
-        "auto-cols": ["auto", "min", "max", "fr", isArbitraryValue]
+        "auto-cols": scaleGridAutoColsRows()
       }],
       /**
        * Grid Auto Rows
        * @see https://tailwindcss.com/docs/grid-auto-rows
        */
       "auto-rows": [{
-        "auto-rows": ["auto", "min", "max", "fr", isArbitraryValue]
+        "auto-rows": scaleGridAutoColsRows()
       }],
       /**
        * Gap
        * @see https://tailwindcss.com/docs/gap
        */
       gap: [{
-        gap: [gap]
+        gap: scaleUnambiguousSpacing()
       }],
       /**
        * Gap X
        * @see https://tailwindcss.com/docs/gap
        */
       "gap-x": [{
-        "gap-x": [gap]
+        "gap-x": scaleUnambiguousSpacing()
       }],
       /**
        * Gap Y
        * @see https://tailwindcss.com/docs/gap
        */
       "gap-y": [{
-        "gap-y": [gap]
+        "gap-y": scaleUnambiguousSpacing()
       }],
       /**
        * Justify Content
        * @see https://tailwindcss.com/docs/justify-content
        */
       "justify-content": [{
-        justify: ["normal", ...getAlign()]
+        justify: [...scaleAlignPrimaryAxis(), "normal"]
       }],
       /**
        * Justify Items
        * @see https://tailwindcss.com/docs/justify-items
        */
       "justify-items": [{
-        "justify-items": ["start", "end", "center", "stretch"]
+        "justify-items": [...scaleAlignSecondaryAxis(), "normal"]
       }],
       /**
        * Justify Self
        * @see https://tailwindcss.com/docs/justify-self
        */
       "justify-self": [{
-        "justify-self": ["auto", "start", "end", "center", "stretch"]
+        "justify-self": ["auto", ...scaleAlignSecondaryAxis()]
       }],
       /**
        * Align Content
        * @see https://tailwindcss.com/docs/align-content
        */
       "align-content": [{
-        content: ["normal", ...getAlign(), "baseline"]
+        content: ["normal", ...scaleAlignPrimaryAxis()]
       }],
       /**
        * Align Items
        * @see https://tailwindcss.com/docs/align-items
        */
       "align-items": [{
-        items: ["start", "end", "center", "baseline", "stretch"]
+        items: [...scaleAlignSecondaryAxis(), {
+          baseline: ["", "last"]
+        }]
       }],
       /**
        * Align Self
        * @see https://tailwindcss.com/docs/align-self
        */
       "align-self": [{
-        self: ["auto", "start", "end", "center", "stretch", "baseline"]
+        self: ["auto", ...scaleAlignSecondaryAxis(), {
+          baseline: ["", "last"]
+        }]
       }],
       /**
        * Place Content
        * @see https://tailwindcss.com/docs/place-content
        */
       "place-content": [{
-        "place-content": [...getAlign(), "baseline"]
+        "place-content": scaleAlignPrimaryAxis()
       }],
       /**
        * Place Items
        * @see https://tailwindcss.com/docs/place-items
        */
       "place-items": [{
-        "place-items": ["start", "end", "center", "baseline", "stretch"]
+        "place-items": [...scaleAlignSecondaryAxis(), "baseline"]
       }],
       /**
        * Place Self
        * @see https://tailwindcss.com/docs/place-self
        */
       "place-self": [{
-        "place-self": ["auto", "start", "end", "center", "stretch"]
+        "place-self": ["auto", ...scaleAlignSecondaryAxis()]
       }],
       // Spacing
       /**
@@ -15124,210 +15344,299 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/padding
        */
       p: [{
-        p: [padding]
+        p: scaleUnambiguousSpacing()
       }],
       /**
-       * Padding X
+       * Padding Inline
        * @see https://tailwindcss.com/docs/padding
        */
       px: [{
-        px: [padding]
+        px: scaleUnambiguousSpacing()
       }],
       /**
-       * Padding Y
+       * Padding Block
        * @see https://tailwindcss.com/docs/padding
        */
       py: [{
-        py: [padding]
+        py: scaleUnambiguousSpacing()
       }],
       /**
-       * Padding Start
+       * Padding Inline Start
        * @see https://tailwindcss.com/docs/padding
        */
       ps: [{
-        ps: [padding]
+        ps: scaleUnambiguousSpacing()
       }],
       /**
-       * Padding End
+       * Padding Inline End
        * @see https://tailwindcss.com/docs/padding
        */
       pe: [{
-        pe: [padding]
+        pe: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Block Start
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pbs: [{
+        pbs: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Padding Block End
+       * @see https://tailwindcss.com/docs/padding
+       */
+      pbe: [{
+        pbe: scaleUnambiguousSpacing()
       }],
       /**
        * Padding Top
        * @see https://tailwindcss.com/docs/padding
        */
       pt: [{
-        pt: [padding]
+        pt: scaleUnambiguousSpacing()
       }],
       /**
        * Padding Right
        * @see https://tailwindcss.com/docs/padding
        */
       pr: [{
-        pr: [padding]
+        pr: scaleUnambiguousSpacing()
       }],
       /**
        * Padding Bottom
        * @see https://tailwindcss.com/docs/padding
        */
       pb: [{
-        pb: [padding]
+        pb: scaleUnambiguousSpacing()
       }],
       /**
        * Padding Left
        * @see https://tailwindcss.com/docs/padding
        */
       pl: [{
-        pl: [padding]
+        pl: scaleUnambiguousSpacing()
       }],
       /**
        * Margin
        * @see https://tailwindcss.com/docs/margin
        */
       m: [{
-        m: [margin]
+        m: scaleMargin()
       }],
       /**
-       * Margin X
+       * Margin Inline
        * @see https://tailwindcss.com/docs/margin
        */
       mx: [{
-        mx: [margin]
+        mx: scaleMargin()
       }],
       /**
-       * Margin Y
+       * Margin Block
        * @see https://tailwindcss.com/docs/margin
        */
       my: [{
-        my: [margin]
+        my: scaleMargin()
       }],
       /**
-       * Margin Start
+       * Margin Inline Start
        * @see https://tailwindcss.com/docs/margin
        */
       ms: [{
-        ms: [margin]
+        ms: scaleMargin()
       }],
       /**
-       * Margin End
+       * Margin Inline End
        * @see https://tailwindcss.com/docs/margin
        */
       me: [{
-        me: [margin]
+        me: scaleMargin()
+      }],
+      /**
+       * Margin Block Start
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mbs: [{
+        mbs: scaleMargin()
+      }],
+      /**
+       * Margin Block End
+       * @see https://tailwindcss.com/docs/margin
+       */
+      mbe: [{
+        mbe: scaleMargin()
       }],
       /**
        * Margin Top
        * @see https://tailwindcss.com/docs/margin
        */
       mt: [{
-        mt: [margin]
+        mt: scaleMargin()
       }],
       /**
        * Margin Right
        * @see https://tailwindcss.com/docs/margin
        */
       mr: [{
-        mr: [margin]
+        mr: scaleMargin()
       }],
       /**
        * Margin Bottom
        * @see https://tailwindcss.com/docs/margin
        */
       mb: [{
-        mb: [margin]
+        mb: scaleMargin()
       }],
       /**
        * Margin Left
        * @see https://tailwindcss.com/docs/margin
        */
       ml: [{
-        ml: [margin]
+        ml: scaleMargin()
       }],
       /**
        * Space Between X
-       * @see https://tailwindcss.com/docs/space
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
        */
       "space-x": [{
-        "space-x": [space]
+        "space-x": scaleUnambiguousSpacing()
       }],
       /**
        * Space Between X Reverse
-       * @see https://tailwindcss.com/docs/space
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
        */
       "space-x-reverse": ["space-x-reverse"],
       /**
        * Space Between Y
-       * @see https://tailwindcss.com/docs/space
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
        */
       "space-y": [{
-        "space-y": [space]
+        "space-y": scaleUnambiguousSpacing()
       }],
       /**
        * Space Between Y Reverse
-       * @see https://tailwindcss.com/docs/space
+       * @see https://tailwindcss.com/docs/margin#adding-space-between-children
        */
       "space-y-reverse": ["space-y-reverse"],
-      // Sizing
+      // --------------
+      // --- Sizing ---
+      // --------------
+      /**
+       * Size
+       * @see https://tailwindcss.com/docs/width#setting-both-width-and-height
+       */
+      size: [{
+        size: scaleSizing()
+      }],
+      /**
+       * Inline Size
+       * @see https://tailwindcss.com/docs/width
+       */
+      "inline-size": [{
+        inline: ["auto", ...scaleSizingInline()]
+      }],
+      /**
+       * Min-Inline Size
+       * @see https://tailwindcss.com/docs/min-width
+       */
+      "min-inline-size": [{
+        "min-inline": ["auto", ...scaleSizingInline()]
+      }],
+      /**
+       * Max-Inline Size
+       * @see https://tailwindcss.com/docs/max-width
+       */
+      "max-inline-size": [{
+        "max-inline": ["none", ...scaleSizingInline()]
+      }],
+      /**
+       * Block Size
+       * @see https://tailwindcss.com/docs/height
+       */
+      "block-size": [{
+        block: ["auto", ...scaleSizingBlock()]
+      }],
+      /**
+       * Min-Block Size
+       * @see https://tailwindcss.com/docs/min-height
+       */
+      "min-block-size": [{
+        "min-block": ["auto", ...scaleSizingBlock()]
+      }],
+      /**
+       * Max-Block Size
+       * @see https://tailwindcss.com/docs/max-height
+       */
+      "max-block-size": [{
+        "max-block": ["none", ...scaleSizingBlock()]
+      }],
       /**
        * Width
        * @see https://tailwindcss.com/docs/width
        */
       w: [{
-        w: ["auto", "min", "max", "fit", "svw", "lvw", "dvw", isArbitraryValue, spacing]
+        w: [themeContainer, "screen", ...scaleSizing()]
       }],
       /**
        * Min-Width
        * @see https://tailwindcss.com/docs/min-width
        */
       "min-w": [{
-        "min-w": [isArbitraryValue, spacing, "min", "max", "fit"]
+        "min-w": [
+          themeContainer,
+          "screen",
+          /** Deprecated. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          "none",
+          ...scaleSizing()
+        ]
       }],
       /**
        * Max-Width
        * @see https://tailwindcss.com/docs/max-width
        */
       "max-w": [{
-        "max-w": [isArbitraryValue, spacing, "none", "full", "min", "max", "fit", "prose", {
-          screen: [isTshirtSize]
-        }, isTshirtSize]
+        "max-w": [
+          themeContainer,
+          "screen",
+          "none",
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          "prose",
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          {
+            screen: [themeBreakpoint]
+          },
+          ...scaleSizing()
+        ]
       }],
       /**
        * Height
        * @see https://tailwindcss.com/docs/height
        */
       h: [{
-        h: [isArbitraryValue, spacing, "auto", "min", "max", "fit", "svh", "lvh", "dvh"]
+        h: ["screen", "lh", ...scaleSizing()]
       }],
       /**
        * Min-Height
        * @see https://tailwindcss.com/docs/min-height
        */
       "min-h": [{
-        "min-h": [isArbitraryValue, spacing, "min", "max", "fit", "svh", "lvh", "dvh"]
+        "min-h": ["screen", "lh", "none", ...scaleSizing()]
       }],
       /**
        * Max-Height
        * @see https://tailwindcss.com/docs/max-height
        */
       "max-h": [{
-        "max-h": [isArbitraryValue, spacing, "min", "max", "fit", "svh", "lvh", "dvh"]
+        "max-h": ["screen", "lh", ...scaleSizing()]
       }],
-      /**
-       * Size
-       * @see https://tailwindcss.com/docs/size
-       */
-      size: [{
-        size: [isArbitraryValue, spacing, "auto", "min", "max", "fit"]
-      }],
-      // Typography
+      // ------------------
+      // --- Typography ---
+      // ------------------
       /**
        * Font Size
        * @see https://tailwindcss.com/docs/font-size
        */
       "font-size": [{
-        text: ["base", isTshirtSize, isArbitraryLength]
+        text: ["base", themeText, isArbitraryVariableLength, isArbitraryLength]
       }],
       /**
        * Font Smoothing
@@ -15344,14 +15653,28 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/font-weight
        */
       "font-weight": [{
-        font: ["thin", "extralight", "light", "normal", "medium", "semibold", "bold", "extrabold", "black", isArbitraryNumber]
+        font: [themeFontWeight, isArbitraryVariableWeight, isArbitraryWeight]
+      }],
+      /**
+       * Font Stretch
+       * @see https://tailwindcss.com/docs/font-stretch
+       */
+      "font-stretch": [{
+        "font-stretch": ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "normal", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded", isPercent, isArbitraryValue]
       }],
       /**
        * Font Family
        * @see https://tailwindcss.com/docs/font-family
        */
       "font-family": [{
-        font: [isAny]
+        font: [isArbitraryVariableFamilyName, isArbitraryFamilyName, themeFont]
+      }],
+      /**
+       * Font Feature Settings
+       * @see https://tailwindcss.com/docs/font-feature-settings
+       */
+      "font-features": [{
+        "font-features": [isArbitraryValue]
       }],
       /**
        * Font Variant Numeric
@@ -15388,35 +15711,32 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/letter-spacing
        */
       tracking: [{
-        tracking: ["tighter", "tight", "normal", "wide", "wider", "widest", isArbitraryValue]
+        tracking: [themeTracking, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Line Clamp
        * @see https://tailwindcss.com/docs/line-clamp
        */
       "line-clamp": [{
-        "line-clamp": ["none", isNumber$1, isArbitraryNumber]
+        "line-clamp": [isNumber$1, "none", isArbitraryVariable, isArbitraryNumber]
       }],
       /**
        * Line Height
        * @see https://tailwindcss.com/docs/line-height
        */
       leading: [{
-        leading: ["none", "tight", "snug", "normal", "relaxed", "loose", isLength, isArbitraryValue]
+        leading: [
+          /** Deprecated since Tailwind CSS v4.0.0. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
+          themeLeading,
+          ...scaleUnambiguousSpacing()
+        ]
       }],
       /**
        * List Style Image
        * @see https://tailwindcss.com/docs/list-style-image
        */
       "list-image": [{
-        "list-image": ["none", isArbitraryValue]
-      }],
-      /**
-       * List Style Type
-       * @see https://tailwindcss.com/docs/list-style-type
-       */
-      "list-style-type": [{
-        list: ["none", "disc", "decimal", isArbitraryValue]
+        "list-image": ["none", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * List Style Position
@@ -15426,19 +15746,11 @@ const getDefaultConfig = () => {
         list: ["inside", "outside"]
       }],
       /**
-       * Placeholder Color
-       * @deprecated since Tailwind CSS v3.0.0
-       * @see https://tailwindcss.com/docs/placeholder-color
+       * List Style Type
+       * @see https://tailwindcss.com/docs/list-style-type
        */
-      "placeholder-color": [{
-        placeholder: [colors]
-      }],
-      /**
-       * Placeholder Opacity
-       * @see https://tailwindcss.com/docs/placeholder-opacity
-       */
-      "placeholder-opacity": [{
-        "placeholder-opacity": [opacity]
+      "list-style-type": [{
+        list: ["disc", "decimal", "none", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Text Alignment
@@ -15448,18 +15760,19 @@ const getDefaultConfig = () => {
         text: ["left", "center", "right", "justify", "start", "end"]
       }],
       /**
+       * Placeholder Color
+       * @deprecated since Tailwind CSS v3.0.0
+       * @see https://v3.tailwindcss.com/docs/placeholder-color
+       */
+      "placeholder-color": [{
+        placeholder: scaleColor()
+      }],
+      /**
        * Text Color
        * @see https://tailwindcss.com/docs/text-color
        */
       "text-color": [{
-        text: [colors]
-      }],
-      /**
-       * Text Opacity
-       * @see https://tailwindcss.com/docs/text-opacity
-       */
-      "text-opacity": [{
-        "text-opacity": [opacity]
+        text: scaleColor()
       }],
       /**
        * Text Decoration
@@ -15471,28 +15784,28 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/text-decoration-style
        */
       "text-decoration-style": [{
-        decoration: [...getLineStyles(), "wavy"]
+        decoration: [...scaleLineStyle(), "wavy"]
       }],
       /**
        * Text Decoration Thickness
        * @see https://tailwindcss.com/docs/text-decoration-thickness
        */
       "text-decoration-thickness": [{
-        decoration: ["auto", "from-font", isLength, isArbitraryLength]
-      }],
-      /**
-       * Text Underline Offset
-       * @see https://tailwindcss.com/docs/text-underline-offset
-       */
-      "underline-offset": [{
-        "underline-offset": ["auto", isLength, isArbitraryValue]
+        decoration: [isNumber$1, "from-font", "auto", isArbitraryVariable, isArbitraryLength]
       }],
       /**
        * Text Decoration Color
        * @see https://tailwindcss.com/docs/text-decoration-color
        */
       "text-decoration-color": [{
-        decoration: [colors]
+        decoration: scaleColor()
+      }],
+      /**
+       * Text Underline Offset
+       * @see https://tailwindcss.com/docs/text-underline-offset
+       */
+      "underline-offset": [{
+        "underline-offset": [isNumber$1, "auto", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Text Transform
@@ -15516,14 +15829,21 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/text-indent
        */
       indent: [{
-        indent: getSpacingWithArbitrary()
+        indent: scaleUnambiguousSpacing()
+      }],
+      /**
+       * Tab Size
+       * @see https://tailwindcss.com/docs/tab-size
+       */
+      "tab-size": [{
+        tab: [isInteger, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Vertical Alignment
        * @see https://tailwindcss.com/docs/vertical-align
        */
       "vertical-align": [{
-        align: ["baseline", "top", "middle", "bottom", "text-top", "text-bottom", "sub", "super", isArbitraryValue]
+        align: ["baseline", "top", "middle", "bottom", "text-top", "text-bottom", "sub", "super", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Whitespace
@@ -15540,6 +15860,13 @@ const getDefaultConfig = () => {
         break: ["normal", "words", "all", "keep"]
       }],
       /**
+       * Overflow Wrap
+       * @see https://tailwindcss.com/docs/overflow-wrap
+       */
+      wrap: [{
+        wrap: ["break-word", "anywhere", "normal"]
+      }],
+      /**
        * Hyphens
        * @see https://tailwindcss.com/docs/hyphens
        */
@@ -15551,9 +15878,11 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/content
        */
       content: [{
-        content: ["none", isArbitraryValue]
+        content: ["none", isArbitraryVariable, isArbitraryValue]
       }],
-      // Backgrounds
+      // -------------------
+      // --- Backgrounds ---
+      // -------------------
       /**
        * Background Attachment
        * @see https://tailwindcss.com/docs/background-attachment
@@ -15569,14 +15898,6 @@ const getDefaultConfig = () => {
         "bg-clip": ["border", "padding", "content", "text"]
       }],
       /**
-       * Background Opacity
-       * @deprecated since Tailwind CSS v3.0.0
-       * @see https://tailwindcss.com/docs/background-opacity
-       */
-      "bg-opacity": [{
-        "bg-opacity": [opacity]
-      }],
-      /**
        * Background Origin
        * @see https://tailwindcss.com/docs/background-origin
        */
@@ -15588,23 +15909,21 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/background-position
        */
       "bg-position": [{
-        bg: [...getPositions(), isArbitraryPosition]
+        bg: scaleBgPosition()
       }],
       /**
        * Background Repeat
        * @see https://tailwindcss.com/docs/background-repeat
        */
       "bg-repeat": [{
-        bg: ["no-repeat", {
-          repeat: ["", "x", "y", "round", "space"]
-        }]
+        bg: scaleBgRepeat()
       }],
       /**
        * Background Size
        * @see https://tailwindcss.com/docs/background-size
        */
       "bg-size": [{
-        bg: ["auto", "cover", "contain", isArbitrarySize]
+        bg: scaleBgSize()
       }],
       /**
        * Background Image
@@ -15612,597 +15931,891 @@ const getDefaultConfig = () => {
        */
       "bg-image": [{
         bg: ["none", {
-          "gradient-to": ["t", "tr", "r", "br", "b", "bl", "l", "tl"]
-        }, isArbitraryImage]
+          linear: [{
+            to: ["t", "tr", "r", "br", "b", "bl", "l", "tl"]
+          }, isInteger, isArbitraryVariable, isArbitraryValue],
+          radial: ["", isArbitraryVariable, isArbitraryValue],
+          conic: [isInteger, isArbitraryVariable, isArbitraryValue]
+        }, isArbitraryVariableImage, isArbitraryImage]
       }],
       /**
        * Background Color
        * @see https://tailwindcss.com/docs/background-color
        */
       "bg-color": [{
-        bg: [colors]
+        bg: scaleColor()
       }],
       /**
        * Gradient Color Stops From Position
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-from-pos": [{
-        from: [gradientColorStopPositions]
+        from: scaleGradientStopPosition()
       }],
       /**
        * Gradient Color Stops Via Position
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-via-pos": [{
-        via: [gradientColorStopPositions]
+        via: scaleGradientStopPosition()
       }],
       /**
        * Gradient Color Stops To Position
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-to-pos": [{
-        to: [gradientColorStopPositions]
+        to: scaleGradientStopPosition()
       }],
       /**
        * Gradient Color Stops From
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-from": [{
-        from: [gradientColorStops]
+        from: scaleColor()
       }],
       /**
        * Gradient Color Stops Via
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-via": [{
-        via: [gradientColorStops]
+        via: scaleColor()
       }],
       /**
        * Gradient Color Stops To
        * @see https://tailwindcss.com/docs/gradient-color-stops
        */
       "gradient-to": [{
-        to: [gradientColorStops]
+        to: scaleColor()
       }],
-      // Borders
+      // ---------------
+      // --- Borders ---
+      // ---------------
       /**
        * Border Radius
        * @see https://tailwindcss.com/docs/border-radius
        */
       rounded: [{
-        rounded: [borderRadius]
+        rounded: scaleRadius()
       }],
       /**
        * Border Radius Start
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-s": [{
-        "rounded-s": [borderRadius]
+        "rounded-s": scaleRadius()
       }],
       /**
        * Border Radius End
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-e": [{
-        "rounded-e": [borderRadius]
+        "rounded-e": scaleRadius()
       }],
       /**
        * Border Radius Top
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-t": [{
-        "rounded-t": [borderRadius]
+        "rounded-t": scaleRadius()
       }],
       /**
        * Border Radius Right
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-r": [{
-        "rounded-r": [borderRadius]
+        "rounded-r": scaleRadius()
       }],
       /**
        * Border Radius Bottom
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-b": [{
-        "rounded-b": [borderRadius]
+        "rounded-b": scaleRadius()
       }],
       /**
        * Border Radius Left
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-l": [{
-        "rounded-l": [borderRadius]
+        "rounded-l": scaleRadius()
       }],
       /**
        * Border Radius Start Start
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-ss": [{
-        "rounded-ss": [borderRadius]
+        "rounded-ss": scaleRadius()
       }],
       /**
        * Border Radius Start End
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-se": [{
-        "rounded-se": [borderRadius]
+        "rounded-se": scaleRadius()
       }],
       /**
        * Border Radius End End
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-ee": [{
-        "rounded-ee": [borderRadius]
+        "rounded-ee": scaleRadius()
       }],
       /**
        * Border Radius End Start
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-es": [{
-        "rounded-es": [borderRadius]
+        "rounded-es": scaleRadius()
       }],
       /**
        * Border Radius Top Left
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-tl": [{
-        "rounded-tl": [borderRadius]
+        "rounded-tl": scaleRadius()
       }],
       /**
        * Border Radius Top Right
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-tr": [{
-        "rounded-tr": [borderRadius]
+        "rounded-tr": scaleRadius()
       }],
       /**
        * Border Radius Bottom Right
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-br": [{
-        "rounded-br": [borderRadius]
+        "rounded-br": scaleRadius()
       }],
       /**
        * Border Radius Bottom Left
        * @see https://tailwindcss.com/docs/border-radius
        */
       "rounded-bl": [{
-        "rounded-bl": [borderRadius]
+        "rounded-bl": scaleRadius()
       }],
       /**
        * Border Width
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w": [{
-        border: [borderWidth]
+        border: scaleBorderWidth()
       }],
       /**
-       * Border Width X
+       * Border Width Inline
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-x": [{
-        "border-x": [borderWidth]
+        "border-x": scaleBorderWidth()
       }],
       /**
-       * Border Width Y
+       * Border Width Block
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-y": [{
-        "border-y": [borderWidth]
+        "border-y": scaleBorderWidth()
       }],
       /**
-       * Border Width Start
+       * Border Width Inline Start
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-s": [{
-        "border-s": [borderWidth]
+        "border-s": scaleBorderWidth()
       }],
       /**
-       * Border Width End
+       * Border Width Inline End
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-e": [{
-        "border-e": [borderWidth]
+        "border-e": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Block Start
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-bs": [{
+        "border-bs": scaleBorderWidth()
+      }],
+      /**
+       * Border Width Block End
+       * @see https://tailwindcss.com/docs/border-width
+       */
+      "border-w-be": [{
+        "border-be": scaleBorderWidth()
       }],
       /**
        * Border Width Top
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-t": [{
-        "border-t": [borderWidth]
+        "border-t": scaleBorderWidth()
       }],
       /**
        * Border Width Right
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-r": [{
-        "border-r": [borderWidth]
+        "border-r": scaleBorderWidth()
       }],
       /**
        * Border Width Bottom
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-b": [{
-        "border-b": [borderWidth]
+        "border-b": scaleBorderWidth()
       }],
       /**
        * Border Width Left
        * @see https://tailwindcss.com/docs/border-width
        */
       "border-w-l": [{
-        "border-l": [borderWidth]
+        "border-l": scaleBorderWidth()
       }],
       /**
-       * Border Opacity
-       * @see https://tailwindcss.com/docs/border-opacity
+       * Divide Width X
+       * @see https://tailwindcss.com/docs/border-width#between-children
        */
-      "border-opacity": [{
-        "border-opacity": [opacity]
+      "divide-x": [{
+        "divide-x": scaleBorderWidth()
       }],
+      /**
+       * Divide Width X Reverse
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-x-reverse": ["divide-x-reverse"],
+      /**
+       * Divide Width Y
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-y": [{
+        "divide-y": scaleBorderWidth()
+      }],
+      /**
+       * Divide Width Y Reverse
+       * @see https://tailwindcss.com/docs/border-width#between-children
+       */
+      "divide-y-reverse": ["divide-y-reverse"],
       /**
        * Border Style
        * @see https://tailwindcss.com/docs/border-style
        */
       "border-style": [{
-        border: [...getLineStyles(), "hidden"]
-      }],
-      /**
-       * Divide Width X
-       * @see https://tailwindcss.com/docs/divide-width
-       */
-      "divide-x": [{
-        "divide-x": [borderWidth]
-      }],
-      /**
-       * Divide Width X Reverse
-       * @see https://tailwindcss.com/docs/divide-width
-       */
-      "divide-x-reverse": ["divide-x-reverse"],
-      /**
-       * Divide Width Y
-       * @see https://tailwindcss.com/docs/divide-width
-       */
-      "divide-y": [{
-        "divide-y": [borderWidth]
-      }],
-      /**
-       * Divide Width Y Reverse
-       * @see https://tailwindcss.com/docs/divide-width
-       */
-      "divide-y-reverse": ["divide-y-reverse"],
-      /**
-       * Divide Opacity
-       * @see https://tailwindcss.com/docs/divide-opacity
-       */
-      "divide-opacity": [{
-        "divide-opacity": [opacity]
+        border: [...scaleLineStyle(), "hidden", "none"]
       }],
       /**
        * Divide Style
-       * @see https://tailwindcss.com/docs/divide-style
+       * @see https://tailwindcss.com/docs/border-style#setting-the-divider-style
        */
       "divide-style": [{
-        divide: getLineStyles()
+        divide: [...scaleLineStyle(), "hidden", "none"]
       }],
       /**
        * Border Color
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color": [{
-        border: [borderColor]
+        border: scaleColor()
       }],
       /**
-       * Border Color X
+       * Border Color Inline
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-x": [{
-        "border-x": [borderColor]
+        "border-x": scaleColor()
       }],
       /**
-       * Border Color Y
+       * Border Color Block
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-y": [{
-        "border-y": [borderColor]
+        "border-y": scaleColor()
       }],
       /**
-       * Border Color S
+       * Border Color Inline Start
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-s": [{
-        "border-s": [borderColor]
+        "border-s": scaleColor()
       }],
       /**
-       * Border Color E
+       * Border Color Inline End
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-e": [{
-        "border-e": [borderColor]
+        "border-e": scaleColor()
+      }],
+      /**
+       * Border Color Block Start
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-bs": [{
+        "border-bs": scaleColor()
+      }],
+      /**
+       * Border Color Block End
+       * @see https://tailwindcss.com/docs/border-color
+       */
+      "border-color-be": [{
+        "border-be": scaleColor()
       }],
       /**
        * Border Color Top
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-t": [{
-        "border-t": [borderColor]
+        "border-t": scaleColor()
       }],
       /**
        * Border Color Right
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-r": [{
-        "border-r": [borderColor]
+        "border-r": scaleColor()
       }],
       /**
        * Border Color Bottom
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-b": [{
-        "border-b": [borderColor]
+        "border-b": scaleColor()
       }],
       /**
        * Border Color Left
        * @see https://tailwindcss.com/docs/border-color
        */
       "border-color-l": [{
-        "border-l": [borderColor]
+        "border-l": scaleColor()
       }],
       /**
        * Divide Color
        * @see https://tailwindcss.com/docs/divide-color
        */
       "divide-color": [{
-        divide: [borderColor]
+        divide: scaleColor()
       }],
       /**
        * Outline Style
        * @see https://tailwindcss.com/docs/outline-style
        */
       "outline-style": [{
-        outline: ["", ...getLineStyles()]
+        outline: [...scaleLineStyle(), "none", "hidden"]
       }],
       /**
        * Outline Offset
        * @see https://tailwindcss.com/docs/outline-offset
        */
       "outline-offset": [{
-        "outline-offset": [isLength, isArbitraryValue]
+        "outline-offset": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Outline Width
        * @see https://tailwindcss.com/docs/outline-width
        */
       "outline-w": [{
-        outline: [isLength, isArbitraryLength]
+        outline: ["", isNumber$1, isArbitraryVariableLength, isArbitraryLength]
       }],
       /**
        * Outline Color
        * @see https://tailwindcss.com/docs/outline-color
        */
       "outline-color": [{
-        outline: [colors]
+        outline: scaleColor()
       }],
-      /**
-       * Ring Width
-       * @see https://tailwindcss.com/docs/ring-width
-       */
-      "ring-w": [{
-        ring: getLengthWithEmptyAndArbitrary()
-      }],
-      /**
-       * Ring Width Inset
-       * @see https://tailwindcss.com/docs/ring-width
-       */
-      "ring-w-inset": ["ring-inset"],
-      /**
-       * Ring Color
-       * @see https://tailwindcss.com/docs/ring-color
-       */
-      "ring-color": [{
-        ring: [colors]
-      }],
-      /**
-       * Ring Opacity
-       * @see https://tailwindcss.com/docs/ring-opacity
-       */
-      "ring-opacity": [{
-        "ring-opacity": [opacity]
-      }],
-      /**
-       * Ring Offset Width
-       * @see https://tailwindcss.com/docs/ring-offset-width
-       */
-      "ring-offset-w": [{
-        "ring-offset": [isLength, isArbitraryLength]
-      }],
-      /**
-       * Ring Offset Color
-       * @see https://tailwindcss.com/docs/ring-offset-color
-       */
-      "ring-offset-color": [{
-        "ring-offset": [colors]
-      }],
-      // Effects
+      // ---------------
+      // --- Effects ---
+      // ---------------
       /**
        * Box Shadow
        * @see https://tailwindcss.com/docs/box-shadow
        */
       shadow: [{
-        shadow: ["", "inner", "none", isTshirtSize, isArbitraryShadow]
+        shadow: [
+          // Deprecated since Tailwind CSS v4.0.0
+          "",
+          "none",
+          themeShadow,
+          isArbitraryVariableShadow,
+          isArbitraryShadow
+        ]
       }],
       /**
        * Box Shadow Color
-       * @see https://tailwindcss.com/docs/box-shadow-color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-shadow-color
        */
       "shadow-color": [{
-        shadow: [isAny]
+        shadow: scaleColor()
+      }],
+      /**
+       * Inset Box Shadow
+       * @see https://tailwindcss.com/docs/box-shadow#adding-an-inset-shadow
+       */
+      "inset-shadow": [{
+        "inset-shadow": ["none", themeInsetShadow, isArbitraryVariableShadow, isArbitraryShadow]
+      }],
+      /**
+       * Inset Box Shadow Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-inset-shadow-color
+       */
+      "inset-shadow-color": [{
+        "inset-shadow": scaleColor()
+      }],
+      /**
+       * Ring Width
+       * @see https://tailwindcss.com/docs/box-shadow#adding-a-ring
+       */
+      "ring-w": [{
+        ring: scaleBorderWidth()
+      }],
+      /**
+       * Ring Width Inset
+       * @see https://v3.tailwindcss.com/docs/ring-width#inset-rings
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-w-inset": ["ring-inset"],
+      /**
+       * Ring Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-ring-color
+       */
+      "ring-color": [{
+        ring: scaleColor()
+      }],
+      /**
+       * Ring Offset Width
+       * @see https://v3.tailwindcss.com/docs/ring-offset-width
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-offset-w": [{
+        "ring-offset": [isNumber$1, isArbitraryLength]
+      }],
+      /**
+       * Ring Offset Color
+       * @see https://v3.tailwindcss.com/docs/ring-offset-color
+       * @deprecated since Tailwind CSS v4.0.0
+       * @see https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/tailwindcss/src/utilities.ts#L4158
+       */
+      "ring-offset-color": [{
+        "ring-offset": scaleColor()
+      }],
+      /**
+       * Inset Ring Width
+       * @see https://tailwindcss.com/docs/box-shadow#adding-an-inset-ring
+       */
+      "inset-ring-w": [{
+        "inset-ring": scaleBorderWidth()
+      }],
+      /**
+       * Inset Ring Color
+       * @see https://tailwindcss.com/docs/box-shadow#setting-the-inset-ring-color
+       */
+      "inset-ring-color": [{
+        "inset-ring": scaleColor()
+      }],
+      /**
+       * Text Shadow
+       * @see https://tailwindcss.com/docs/text-shadow
+       */
+      "text-shadow": [{
+        "text-shadow": ["none", themeTextShadow, isArbitraryVariableShadow, isArbitraryShadow]
+      }],
+      /**
+       * Text Shadow Color
+       * @see https://tailwindcss.com/docs/text-shadow#setting-the-shadow-color
+       */
+      "text-shadow-color": [{
+        "text-shadow": scaleColor()
       }],
       /**
        * Opacity
        * @see https://tailwindcss.com/docs/opacity
        */
       opacity: [{
-        opacity: [opacity]
+        opacity: [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Mix Blend Mode
        * @see https://tailwindcss.com/docs/mix-blend-mode
        */
       "mix-blend": [{
-        "mix-blend": [...getBlendModes(), "plus-lighter", "plus-darker"]
+        "mix-blend": [...scaleBlendMode(), "plus-darker", "plus-lighter"]
       }],
       /**
        * Background Blend Mode
        * @see https://tailwindcss.com/docs/background-blend-mode
        */
       "bg-blend": [{
-        "bg-blend": getBlendModes()
+        "bg-blend": scaleBlendMode()
       }],
-      // Filters
+      /**
+       * Mask Clip
+       * @see https://tailwindcss.com/docs/mask-clip
+       */
+      "mask-clip": [{
+        "mask-clip": ["border", "padding", "content", "fill", "stroke", "view"]
+      }, "mask-no-clip"],
+      /**
+       * Mask Composite
+       * @see https://tailwindcss.com/docs/mask-composite
+       */
+      "mask-composite": [{
+        mask: ["add", "subtract", "intersect", "exclude"]
+      }],
+      /**
+       * Mask Image
+       * @see https://tailwindcss.com/docs/mask-image
+       */
+      "mask-image-linear-pos": [{
+        "mask-linear": [isNumber$1]
+      }],
+      "mask-image-linear-from-pos": [{
+        "mask-linear-from": scaleMaskImagePosition()
+      }],
+      "mask-image-linear-to-pos": [{
+        "mask-linear-to": scaleMaskImagePosition()
+      }],
+      "mask-image-linear-from-color": [{
+        "mask-linear-from": scaleColor()
+      }],
+      "mask-image-linear-to-color": [{
+        "mask-linear-to": scaleColor()
+      }],
+      "mask-image-t-from-pos": [{
+        "mask-t-from": scaleMaskImagePosition()
+      }],
+      "mask-image-t-to-pos": [{
+        "mask-t-to": scaleMaskImagePosition()
+      }],
+      "mask-image-t-from-color": [{
+        "mask-t-from": scaleColor()
+      }],
+      "mask-image-t-to-color": [{
+        "mask-t-to": scaleColor()
+      }],
+      "mask-image-r-from-pos": [{
+        "mask-r-from": scaleMaskImagePosition()
+      }],
+      "mask-image-r-to-pos": [{
+        "mask-r-to": scaleMaskImagePosition()
+      }],
+      "mask-image-r-from-color": [{
+        "mask-r-from": scaleColor()
+      }],
+      "mask-image-r-to-color": [{
+        "mask-r-to": scaleColor()
+      }],
+      "mask-image-b-from-pos": [{
+        "mask-b-from": scaleMaskImagePosition()
+      }],
+      "mask-image-b-to-pos": [{
+        "mask-b-to": scaleMaskImagePosition()
+      }],
+      "mask-image-b-from-color": [{
+        "mask-b-from": scaleColor()
+      }],
+      "mask-image-b-to-color": [{
+        "mask-b-to": scaleColor()
+      }],
+      "mask-image-l-from-pos": [{
+        "mask-l-from": scaleMaskImagePosition()
+      }],
+      "mask-image-l-to-pos": [{
+        "mask-l-to": scaleMaskImagePosition()
+      }],
+      "mask-image-l-from-color": [{
+        "mask-l-from": scaleColor()
+      }],
+      "mask-image-l-to-color": [{
+        "mask-l-to": scaleColor()
+      }],
+      "mask-image-x-from-pos": [{
+        "mask-x-from": scaleMaskImagePosition()
+      }],
+      "mask-image-x-to-pos": [{
+        "mask-x-to": scaleMaskImagePosition()
+      }],
+      "mask-image-x-from-color": [{
+        "mask-x-from": scaleColor()
+      }],
+      "mask-image-x-to-color": [{
+        "mask-x-to": scaleColor()
+      }],
+      "mask-image-y-from-pos": [{
+        "mask-y-from": scaleMaskImagePosition()
+      }],
+      "mask-image-y-to-pos": [{
+        "mask-y-to": scaleMaskImagePosition()
+      }],
+      "mask-image-y-from-color": [{
+        "mask-y-from": scaleColor()
+      }],
+      "mask-image-y-to-color": [{
+        "mask-y-to": scaleColor()
+      }],
+      "mask-image-radial": [{
+        "mask-radial": [isArbitraryVariable, isArbitraryValue]
+      }],
+      "mask-image-radial-from-pos": [{
+        "mask-radial-from": scaleMaskImagePosition()
+      }],
+      "mask-image-radial-to-pos": [{
+        "mask-radial-to": scaleMaskImagePosition()
+      }],
+      "mask-image-radial-from-color": [{
+        "mask-radial-from": scaleColor()
+      }],
+      "mask-image-radial-to-color": [{
+        "mask-radial-to": scaleColor()
+      }],
+      "mask-image-radial-shape": [{
+        "mask-radial": ["circle", "ellipse"]
+      }],
+      "mask-image-radial-size": [{
+        "mask-radial": [{
+          closest: ["side", "corner"],
+          farthest: ["side", "corner"]
+        }]
+      }],
+      "mask-image-radial-pos": [{
+        "mask-radial-at": scalePosition()
+      }],
+      "mask-image-conic-pos": [{
+        "mask-conic": [isNumber$1]
+      }],
+      "mask-image-conic-from-pos": [{
+        "mask-conic-from": scaleMaskImagePosition()
+      }],
+      "mask-image-conic-to-pos": [{
+        "mask-conic-to": scaleMaskImagePosition()
+      }],
+      "mask-image-conic-from-color": [{
+        "mask-conic-from": scaleColor()
+      }],
+      "mask-image-conic-to-color": [{
+        "mask-conic-to": scaleColor()
+      }],
+      /**
+       * Mask Mode
+       * @see https://tailwindcss.com/docs/mask-mode
+       */
+      "mask-mode": [{
+        mask: ["alpha", "luminance", "match"]
+      }],
+      /**
+       * Mask Origin
+       * @see https://tailwindcss.com/docs/mask-origin
+       */
+      "mask-origin": [{
+        "mask-origin": ["border", "padding", "content", "fill", "stroke", "view"]
+      }],
+      /**
+       * Mask Position
+       * @see https://tailwindcss.com/docs/mask-position
+       */
+      "mask-position": [{
+        mask: scaleBgPosition()
+      }],
+      /**
+       * Mask Repeat
+       * @see https://tailwindcss.com/docs/mask-repeat
+       */
+      "mask-repeat": [{
+        mask: scaleBgRepeat()
+      }],
+      /**
+       * Mask Size
+       * @see https://tailwindcss.com/docs/mask-size
+       */
+      "mask-size": [{
+        mask: scaleBgSize()
+      }],
+      /**
+       * Mask Type
+       * @see https://tailwindcss.com/docs/mask-type
+       */
+      "mask-type": [{
+        "mask-type": ["alpha", "luminance"]
+      }],
+      /**
+       * Mask Image
+       * @see https://tailwindcss.com/docs/mask-image
+       */
+      "mask-image": [{
+        mask: ["none", isArbitraryVariable, isArbitraryValue]
+      }],
+      // ---------------
+      // --- Filters ---
+      // ---------------
       /**
        * Filter
-       * @deprecated since Tailwind CSS v3.0.0
        * @see https://tailwindcss.com/docs/filter
        */
       filter: [{
-        filter: ["", "none"]
+        filter: [
+          // Deprecated since Tailwind CSS v3.0.0
+          "",
+          "none",
+          isArbitraryVariable,
+          isArbitraryValue
+        ]
       }],
       /**
        * Blur
        * @see https://tailwindcss.com/docs/blur
        */
       blur: [{
-        blur: [blur]
+        blur: scaleBlur()
       }],
       /**
        * Brightness
        * @see https://tailwindcss.com/docs/brightness
        */
       brightness: [{
-        brightness: [brightness]
+        brightness: [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Contrast
        * @see https://tailwindcss.com/docs/contrast
        */
       contrast: [{
-        contrast: [contrast]
+        contrast: [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Drop Shadow
        * @see https://tailwindcss.com/docs/drop-shadow
        */
       "drop-shadow": [{
-        "drop-shadow": ["", "none", isTshirtSize, isArbitraryValue]
+        "drop-shadow": [
+          // Deprecated since Tailwind CSS v4.0.0
+          "",
+          "none",
+          themeDropShadow,
+          isArbitraryVariableShadow,
+          isArbitraryShadow
+        ]
+      }],
+      /**
+       * Drop Shadow Color
+       * @see https://tailwindcss.com/docs/filter-drop-shadow#setting-the-shadow-color
+       */
+      "drop-shadow-color": [{
+        "drop-shadow": scaleColor()
       }],
       /**
        * Grayscale
        * @see https://tailwindcss.com/docs/grayscale
        */
       grayscale: [{
-        grayscale: [grayscale]
+        grayscale: ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Hue Rotate
        * @see https://tailwindcss.com/docs/hue-rotate
        */
       "hue-rotate": [{
-        "hue-rotate": [hueRotate]
+        "hue-rotate": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Invert
        * @see https://tailwindcss.com/docs/invert
        */
       invert: [{
-        invert: [invert]
+        invert: ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Saturate
        * @see https://tailwindcss.com/docs/saturate
        */
       saturate: [{
-        saturate: [saturate]
+        saturate: [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Sepia
        * @see https://tailwindcss.com/docs/sepia
        */
       sepia: [{
-        sepia: [sepia]
+        sepia: ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Filter
-       * @deprecated since Tailwind CSS v3.0.0
        * @see https://tailwindcss.com/docs/backdrop-filter
        */
       "backdrop-filter": [{
-        "backdrop-filter": ["", "none"]
+        "backdrop-filter": [
+          // Deprecated since Tailwind CSS v3.0.0
+          "",
+          "none",
+          isArbitraryVariable,
+          isArbitraryValue
+        ]
       }],
       /**
        * Backdrop Blur
        * @see https://tailwindcss.com/docs/backdrop-blur
        */
       "backdrop-blur": [{
-        "backdrop-blur": [blur]
+        "backdrop-blur": scaleBlur()
       }],
       /**
        * Backdrop Brightness
        * @see https://tailwindcss.com/docs/backdrop-brightness
        */
       "backdrop-brightness": [{
-        "backdrop-brightness": [brightness]
+        "backdrop-brightness": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Contrast
        * @see https://tailwindcss.com/docs/backdrop-contrast
        */
       "backdrop-contrast": [{
-        "backdrop-contrast": [contrast]
+        "backdrop-contrast": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Grayscale
        * @see https://tailwindcss.com/docs/backdrop-grayscale
        */
       "backdrop-grayscale": [{
-        "backdrop-grayscale": [grayscale]
+        "backdrop-grayscale": ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Hue Rotate
        * @see https://tailwindcss.com/docs/backdrop-hue-rotate
        */
       "backdrop-hue-rotate": [{
-        "backdrop-hue-rotate": [hueRotate]
+        "backdrop-hue-rotate": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Invert
        * @see https://tailwindcss.com/docs/backdrop-invert
        */
       "backdrop-invert": [{
-        "backdrop-invert": [invert]
+        "backdrop-invert": ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Opacity
        * @see https://tailwindcss.com/docs/backdrop-opacity
        */
       "backdrop-opacity": [{
-        "backdrop-opacity": [opacity]
+        "backdrop-opacity": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Saturate
        * @see https://tailwindcss.com/docs/backdrop-saturate
        */
       "backdrop-saturate": [{
-        "backdrop-saturate": [saturate]
+        "backdrop-saturate": [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Backdrop Sepia
        * @see https://tailwindcss.com/docs/backdrop-sepia
        */
       "backdrop-sepia": [{
-        "backdrop-sepia": [sepia]
+        "backdrop-sepia": ["", isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
-      // Tables
+      // --------------
+      // --- Tables ---
+      // --------------
       /**
        * Border Collapse
        * @see https://tailwindcss.com/docs/border-collapse
@@ -16215,21 +16828,21 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/border-spacing
        */
       "border-spacing": [{
-        "border-spacing": [borderSpacing]
+        "border-spacing": scaleUnambiguousSpacing()
       }],
       /**
        * Border Spacing X
        * @see https://tailwindcss.com/docs/border-spacing
        */
       "border-spacing-x": [{
-        "border-spacing-x": [borderSpacing]
+        "border-spacing-x": scaleUnambiguousSpacing()
       }],
       /**
        * Border Spacing Y
        * @see https://tailwindcss.com/docs/border-spacing
        */
       "border-spacing-y": [{
-        "border-spacing-y": [borderSpacing]
+        "border-spacing-y": scaleUnambiguousSpacing()
       }],
       /**
        * Table Layout
@@ -16245,120 +16858,227 @@ const getDefaultConfig = () => {
       caption: [{
         caption: ["top", "bottom"]
       }],
-      // Transitions and Animation
+      // ---------------------------------
+      // --- Transitions and Animation ---
+      // ---------------------------------
       /**
-       * Tranisition Property
+       * Transition Property
        * @see https://tailwindcss.com/docs/transition-property
        */
       transition: [{
-        transition: ["none", "all", "", "colors", "opacity", "shadow", "transform", isArbitraryValue]
+        transition: ["", "all", "colors", "opacity", "shadow", "transform", "none", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Transition Behavior
+       * @see https://tailwindcss.com/docs/transition-behavior
+       */
+      "transition-behavior": [{
+        transition: ["normal", "discrete"]
       }],
       /**
        * Transition Duration
        * @see https://tailwindcss.com/docs/transition-duration
        */
       duration: [{
-        duration: getNumberAndArbitrary()
+        duration: [isNumber$1, "initial", isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Transition Timing Function
        * @see https://tailwindcss.com/docs/transition-timing-function
        */
       ease: [{
-        ease: ["linear", "in", "out", "in-out", isArbitraryValue]
+        ease: ["linear", "initial", themeEase, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Transition Delay
        * @see https://tailwindcss.com/docs/transition-delay
        */
       delay: [{
-        delay: getNumberAndArbitrary()
+        delay: [isNumber$1, isArbitraryVariable, isArbitraryValue]
       }],
       /**
        * Animation
        * @see https://tailwindcss.com/docs/animation
        */
       animate: [{
-        animate: ["none", "spin", "ping", "pulse", "bounce", isArbitraryValue]
+        animate: ["none", themeAnimate, isArbitraryVariable, isArbitraryValue]
       }],
-      // Transforms
+      // ------------------
+      // --- Transforms ---
+      // ------------------
       /**
-       * Transform
-       * @see https://tailwindcss.com/docs/transform
+       * Backface Visibility
+       * @see https://tailwindcss.com/docs/backface-visibility
        */
-      transform: [{
-        transform: ["", "gpu", "none"]
-      }],
-      /**
-       * Scale
-       * @see https://tailwindcss.com/docs/scale
-       */
-      scale: [{
-        scale: [scale]
+      backface: [{
+        backface: ["hidden", "visible"]
       }],
       /**
-       * Scale X
-       * @see https://tailwindcss.com/docs/scale
+       * Perspective
+       * @see https://tailwindcss.com/docs/perspective
        */
-      "scale-x": [{
-        "scale-x": [scale]
+      perspective: [{
+        perspective: [themePerspective, isArbitraryVariable, isArbitraryValue]
       }],
       /**
-       * Scale Y
-       * @see https://tailwindcss.com/docs/scale
+       * Perspective Origin
+       * @see https://tailwindcss.com/docs/perspective-origin
        */
-      "scale-y": [{
-        "scale-y": [scale]
+      "perspective-origin": [{
+        "perspective-origin": scalePositionWithArbitrary()
       }],
       /**
        * Rotate
        * @see https://tailwindcss.com/docs/rotate
        */
       rotate: [{
-        rotate: [isInteger, isArbitraryValue]
+        rotate: scaleRotate()
       }],
       /**
-       * Translate X
-       * @see https://tailwindcss.com/docs/translate
+       * Rotate X
+       * @see https://tailwindcss.com/docs/rotate
        */
-      "translate-x": [{
-        "translate-x": [translate]
+      "rotate-x": [{
+        "rotate-x": scaleRotate()
       }],
       /**
-       * Translate Y
-       * @see https://tailwindcss.com/docs/translate
+       * Rotate Y
+       * @see https://tailwindcss.com/docs/rotate
        */
-      "translate-y": [{
-        "translate-y": [translate]
+      "rotate-y": [{
+        "rotate-y": scaleRotate()
+      }],
+      /**
+       * Rotate Z
+       * @see https://tailwindcss.com/docs/rotate
+       */
+      "rotate-z": [{
+        "rotate-z": scaleRotate()
+      }],
+      /**
+       * Scale
+       * @see https://tailwindcss.com/docs/scale
+       */
+      scale: [{
+        scale: scaleScale()
+      }],
+      /**
+       * Scale X
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-x": [{
+        "scale-x": scaleScale()
+      }],
+      /**
+       * Scale Y
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-y": [{
+        "scale-y": scaleScale()
+      }],
+      /**
+       * Scale Z
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-z": [{
+        "scale-z": scaleScale()
+      }],
+      /**
+       * Scale 3D
+       * @see https://tailwindcss.com/docs/scale
+       */
+      "scale-3d": ["scale-3d"],
+      /**
+       * Skew
+       * @see https://tailwindcss.com/docs/skew
+       */
+      skew: [{
+        skew: scaleSkew()
       }],
       /**
        * Skew X
        * @see https://tailwindcss.com/docs/skew
        */
       "skew-x": [{
-        "skew-x": [skew]
+        "skew-x": scaleSkew()
       }],
       /**
        * Skew Y
        * @see https://tailwindcss.com/docs/skew
        */
       "skew-y": [{
-        "skew-y": [skew]
+        "skew-y": scaleSkew()
+      }],
+      /**
+       * Transform
+       * @see https://tailwindcss.com/docs/transform
+       */
+      transform: [{
+        transform: [isArbitraryVariable, isArbitraryValue, "", "none", "gpu", "cpu"]
       }],
       /**
        * Transform Origin
        * @see https://tailwindcss.com/docs/transform-origin
        */
       "transform-origin": [{
-        origin: ["center", "top", "top-right", "right", "bottom-right", "bottom", "bottom-left", "left", "top-left", isArbitraryValue]
+        origin: scalePositionWithArbitrary()
       }],
-      // Interactivity
+      /**
+       * Transform Style
+       * @see https://tailwindcss.com/docs/transform-style
+       */
+      "transform-style": [{
+        transform: ["3d", "flat"]
+      }],
+      /**
+       * Translate
+       * @see https://tailwindcss.com/docs/translate
+       */
+      translate: [{
+        translate: scaleTranslate()
+      }],
+      /**
+       * Translate X
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-x": [{
+        "translate-x": scaleTranslate()
+      }],
+      /**
+       * Translate Y
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-y": [{
+        "translate-y": scaleTranslate()
+      }],
+      /**
+       * Translate Z
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-z": [{
+        "translate-z": scaleTranslate()
+      }],
+      /**
+       * Translate None
+       * @see https://tailwindcss.com/docs/translate
+       */
+      "translate-none": ["translate-none"],
+      /**
+       * Zoom
+       * @see https://tailwindcss.com/docs/zoom
+       */
+      zoom: [{
+        zoom: [isInteger, isArbitraryVariable, isArbitraryValue]
+      }],
+      // ---------------------
+      // --- Interactivity ---
+      // ---------------------
       /**
        * Accent Color
        * @see https://tailwindcss.com/docs/accent-color
        */
       accent: [{
-        accent: ["auto", colors]
+        accent: scaleColor()
       }],
       /**
        * Appearance
@@ -16368,32 +17088,46 @@ const getDefaultConfig = () => {
         appearance: ["none", "auto"]
       }],
       /**
-       * Cursor
-       * @see https://tailwindcss.com/docs/cursor
-       */
-      cursor: [{
-        cursor: ["auto", "default", "pointer", "wait", "text", "move", "help", "not-allowed", "none", "context-menu", "progress", "cell", "crosshair", "vertical-text", "alias", "copy", "no-drop", "grab", "grabbing", "all-scroll", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out", isArbitraryValue]
-      }],
-      /**
        * Caret Color
        * @see https://tailwindcss.com/docs/just-in-time-mode#caret-color-utilities
        */
       "caret-color": [{
-        caret: [colors]
+        caret: scaleColor()
+      }],
+      /**
+       * Color Scheme
+       * @see https://tailwindcss.com/docs/color-scheme
+       */
+      "color-scheme": [{
+        scheme: ["normal", "dark", "light", "light-dark", "only-dark", "only-light"]
+      }],
+      /**
+       * Cursor
+       * @see https://tailwindcss.com/docs/cursor
+       */
+      cursor: [{
+        cursor: ["auto", "default", "pointer", "wait", "text", "move", "help", "not-allowed", "none", "context-menu", "progress", "cell", "crosshair", "vertical-text", "alias", "copy", "no-drop", "grab", "grabbing", "all-scroll", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out", isArbitraryVariable, isArbitraryValue]
+      }],
+      /**
+       * Field Sizing
+       * @see https://tailwindcss.com/docs/field-sizing
+       */
+      "field-sizing": [{
+        "field-sizing": ["fixed", "content"]
       }],
       /**
        * Pointer Events
        * @see https://tailwindcss.com/docs/pointer-events
        */
       "pointer-events": [{
-        "pointer-events": ["none", "auto"]
+        "pointer-events": ["auto", "none"]
       }],
       /**
        * Resize
        * @see https://tailwindcss.com/docs/resize
        */
       resize: [{
-        resize: ["none", "y", "x", ""]
+        resize: ["none", "", "y", "x"]
       }],
       /**
        * Scroll Behavior
@@ -16403,130 +17137,186 @@ const getDefaultConfig = () => {
         scroll: ["auto", "smooth"]
       }],
       /**
+       * Scrollbar Thumb Color
+       * @see https://tailwindcss.com/docs/scrollbar-color
+       */
+      "scrollbar-thumb-color": [{
+        "scrollbar-thumb": scaleColor()
+      }],
+      /**
+       * Scrollbar Track Color
+       * @see https://tailwindcss.com/docs/scrollbar-color
+       */
+      "scrollbar-track-color": [{
+        "scrollbar-track": scaleColor()
+      }],
+      /**
+       * Scrollbar Gutter
+       * @see https://tailwindcss.com/docs/scrollbar-gutter
+       */
+      "scrollbar-gutter": [{
+        "scrollbar-gutter": ["auto", "stable", "both"]
+      }],
+      /**
+       * Scrollbar Width
+       * @see https://tailwindcss.com/docs/scrollbar-width
+       */
+      "scrollbar-w": [{
+        scrollbar: ["auto", "thin", "none"]
+      }],
+      /**
        * Scroll Margin
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-m": [{
-        "scroll-m": getSpacingWithArbitrary()
+        "scroll-m": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Margin X
+       * Scroll Margin Inline
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-mx": [{
-        "scroll-mx": getSpacingWithArbitrary()
+        "scroll-mx": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Margin Y
+       * Scroll Margin Block
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-my": [{
-        "scroll-my": getSpacingWithArbitrary()
+        "scroll-my": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Margin Start
+       * Scroll Margin Inline Start
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-ms": [{
-        "scroll-ms": getSpacingWithArbitrary()
+        "scroll-ms": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Margin End
+       * Scroll Margin Inline End
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-me": [{
-        "scroll-me": getSpacingWithArbitrary()
+        "scroll-me": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Block Start
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mbs": [{
+        "scroll-mbs": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Margin Block End
+       * @see https://tailwindcss.com/docs/scroll-margin
+       */
+      "scroll-mbe": [{
+        "scroll-mbe": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Margin Top
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-mt": [{
-        "scroll-mt": getSpacingWithArbitrary()
+        "scroll-mt": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Margin Right
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-mr": [{
-        "scroll-mr": getSpacingWithArbitrary()
+        "scroll-mr": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Margin Bottom
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-mb": [{
-        "scroll-mb": getSpacingWithArbitrary()
+        "scroll-mb": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Margin Left
        * @see https://tailwindcss.com/docs/scroll-margin
        */
       "scroll-ml": [{
-        "scroll-ml": getSpacingWithArbitrary()
+        "scroll-ml": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Padding
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-p": [{
-        "scroll-p": getSpacingWithArbitrary()
+        "scroll-p": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Padding X
+       * Scroll Padding Inline
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-px": [{
-        "scroll-px": getSpacingWithArbitrary()
+        "scroll-px": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Padding Y
+       * Scroll Padding Block
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-py": [{
-        "scroll-py": getSpacingWithArbitrary()
+        "scroll-py": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Padding Start
+       * Scroll Padding Inline Start
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-ps": [{
-        "scroll-ps": getSpacingWithArbitrary()
+        "scroll-ps": scaleUnambiguousSpacing()
       }],
       /**
-       * Scroll Padding End
+       * Scroll Padding Inline End
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-pe": [{
-        "scroll-pe": getSpacingWithArbitrary()
+        "scroll-pe": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Block Start
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pbs": [{
+        "scroll-pbs": scaleUnambiguousSpacing()
+      }],
+      /**
+       * Scroll Padding Block End
+       * @see https://tailwindcss.com/docs/scroll-padding
+       */
+      "scroll-pbe": [{
+        "scroll-pbe": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Padding Top
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-pt": [{
-        "scroll-pt": getSpacingWithArbitrary()
+        "scroll-pt": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Padding Right
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-pr": [{
-        "scroll-pr": getSpacingWithArbitrary()
+        "scroll-pr": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Padding Bottom
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-pb": [{
-        "scroll-pb": getSpacingWithArbitrary()
+        "scroll-pb": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Padding Left
        * @see https://tailwindcss.com/docs/scroll-padding
        */
       "scroll-pl": [{
-        "scroll-pl": getSpacingWithArbitrary()
+        "scroll-pl": scaleUnambiguousSpacing()
       }],
       /**
        * Scroll Snap Align
@@ -16594,36 +17384,35 @@ const getDefaultConfig = () => {
        * @see https://tailwindcss.com/docs/will-change
        */
       "will-change": [{
-        "will-change": ["auto", "scroll", "contents", "transform", isArbitraryValue]
+        "will-change": ["auto", "scroll", "contents", "transform", isArbitraryVariable, isArbitraryValue]
       }],
-      // SVG
+      // -----------
+      // --- SVG ---
+      // -----------
       /**
        * Fill
        * @see https://tailwindcss.com/docs/fill
        */
       fill: [{
-        fill: [colors, "none"]
+        fill: ["none", ...scaleColor()]
       }],
       /**
        * Stroke Width
        * @see https://tailwindcss.com/docs/stroke-width
        */
       "stroke-w": [{
-        stroke: [isLength, isArbitraryLength, isArbitraryNumber]
+        stroke: [isNumber$1, isArbitraryVariableLength, isArbitraryLength, isArbitraryNumber]
       }],
       /**
        * Stroke
        * @see https://tailwindcss.com/docs/stroke
        */
       stroke: [{
-        stroke: [colors, "none"]
+        stroke: ["none", ...scaleColor()]
       }],
-      // Accessibility
-      /**
-       * Screen Readers
-       * @see https://tailwindcss.com/docs/screen-readers
-       */
-      sr: ["sr-only", "not-sr-only"],
+      // ---------------------
+      // --- Accessibility ---
+      // ---------------------
       /**
        * Forced Color Adjust
        * @see https://tailwindcss.com/docs/forced-color-adjust
@@ -16633,17 +17422,18 @@ const getDefaultConfig = () => {
       }]
     },
     conflictingClassGroups: {
+      "container-named": ["container-type"],
       overflow: ["overflow-x", "overflow-y"],
       overscroll: ["overscroll-x", "overscroll-y"],
-      inset: ["inset-x", "inset-y", "start", "end", "top", "right", "bottom", "left"],
+      inset: ["inset-x", "inset-y", "inset-bs", "inset-be", "start", "end", "top", "right", "bottom", "left"],
       "inset-x": ["right", "left"],
       "inset-y": ["top", "bottom"],
       flex: ["basis", "grow", "shrink"],
       gap: ["gap-x", "gap-y"],
-      p: ["px", "py", "ps", "pe", "pt", "pr", "pb", "pl"],
+      p: ["px", "py", "ps", "pe", "pbs", "pbe", "pt", "pr", "pb", "pl"],
       px: ["pr", "pl"],
       py: ["pt", "pb"],
-      m: ["mx", "my", "ms", "me", "mt", "mr", "mb", "ml"],
+      m: ["mx", "my", "ms", "me", "mbs", "mbe", "mt", "mr", "mb", "ml"],
       mx: ["mr", "ml"],
       my: ["mt", "mb"],
       size: ["w", "h"],
@@ -16663,16 +17453,18 @@ const getDefaultConfig = () => {
       "rounded-b": ["rounded-br", "rounded-bl"],
       "rounded-l": ["rounded-tl", "rounded-bl"],
       "border-spacing": ["border-spacing-x", "border-spacing-y"],
-      "border-w": ["border-w-s", "border-w-e", "border-w-t", "border-w-r", "border-w-b", "border-w-l"],
+      "border-w": ["border-w-x", "border-w-y", "border-w-s", "border-w-e", "border-w-bs", "border-w-be", "border-w-t", "border-w-r", "border-w-b", "border-w-l"],
       "border-w-x": ["border-w-r", "border-w-l"],
       "border-w-y": ["border-w-t", "border-w-b"],
-      "border-color": ["border-color-s", "border-color-e", "border-color-t", "border-color-r", "border-color-b", "border-color-l"],
+      "border-color": ["border-color-x", "border-color-y", "border-color-s", "border-color-e", "border-color-bs", "border-color-be", "border-color-t", "border-color-r", "border-color-b", "border-color-l"],
       "border-color-x": ["border-color-r", "border-color-l"],
       "border-color-y": ["border-color-t", "border-color-b"],
-      "scroll-m": ["scroll-mx", "scroll-my", "scroll-ms", "scroll-me", "scroll-mt", "scroll-mr", "scroll-mb", "scroll-ml"],
+      translate: ["translate-x", "translate-y", "translate-none"],
+      "translate-none": ["translate", "translate-x", "translate-y", "translate-z"],
+      "scroll-m": ["scroll-mx", "scroll-my", "scroll-ms", "scroll-me", "scroll-mbs", "scroll-mbe", "scroll-mt", "scroll-mr", "scroll-mb", "scroll-ml"],
       "scroll-mx": ["scroll-mr", "scroll-ml"],
       "scroll-my": ["scroll-mt", "scroll-mb"],
-      "scroll-p": ["scroll-px", "scroll-py", "scroll-ps", "scroll-pe", "scroll-pt", "scroll-pr", "scroll-pb", "scroll-pl"],
+      "scroll-p": ["scroll-px", "scroll-py", "scroll-ps", "scroll-pe", "scroll-pbs", "scroll-pbe", "scroll-pt", "scroll-pr", "scroll-pb", "scroll-pl"],
       "scroll-px": ["scroll-pr", "scroll-pl"],
       "scroll-py": ["scroll-pt", "scroll-pb"],
       touch: ["touch-x", "touch-y", "touch-pz"],
@@ -16682,7 +17474,9 @@ const getDefaultConfig = () => {
     },
     conflictingClassGroupModifiers: {
       "font-size": ["leading"]
-    }
+    },
+    postfixLookupClassGroups: ["container-type"],
+    orderSensitiveModifiers: ["*", "**", "after", "backdrop", "before", "details-content", "file", "first-letter", "first-line", "marker", "placeholder", "selection"]
   };
 };
 const twMerge = /* @__PURE__ */ createTailwindMerge(getDefaultConfig);
@@ -16743,9 +17537,24 @@ const cva = (base, config) => (props2) => {
   return cx(base, getVariantClassNames, getCompoundVariantClassNames, props2 === null || props2 === void 0 ? void 0 : props2.class, props2 === null || props2 === void 0 ? void 0 : props2.className);
 };
 const toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+const toCamelCase = (string) => string.replace(
+  /^([A-Z])|[\s-_]+(\w)/g,
+  (match2, p1, p2) => p2 ? p2.toUpperCase() : p1.toLowerCase()
+);
+const toPascalCase = (string) => {
+  const camelCase = toCamelCase(string);
+  return camelCase.charAt(0).toUpperCase() + camelCase.slice(1);
+};
 const mergeClasses = (...classes) => classes.filter((className, index2, array) => {
   return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index2;
 }).join(" ").trim();
+const hasA11yProp = (props2) => {
+  for (const prop in props2) {
+    if (prop.startsWith("aria-") || prop === "role" || prop === "title") {
+      return true;
+    }
+  }
+};
 var defaultAttributes = {
   xmlns: "http://www.w3.org/2000/svg",
   width: 24,
@@ -16767,39 +17576,47 @@ const Icon = reactExports.forwardRef(
     children,
     iconNode,
     ...rest
-  }, ref) => {
-    return reactExports.createElement(
-      "svg",
-      {
-        ref,
-        ...defaultAttributes,
-        width: size2,
-        height: size2,
-        stroke: color,
-        strokeWidth: absoluteStrokeWidth ? Number(strokeWidth) * 24 / Number(size2) : strokeWidth,
-        className: mergeClasses("lucide", className),
-        ...rest
-      },
-      [
-        ...iconNode.map(([tag, attrs]) => reactExports.createElement(tag, attrs)),
-        ...Array.isArray(children) ? children : [children]
-      ]
-    );
-  }
+  }, ref) => reactExports.createElement(
+    "svg",
+    {
+      ref,
+      ...defaultAttributes,
+      width: size2,
+      height: size2,
+      stroke: color,
+      strokeWidth: absoluteStrokeWidth ? Number(strokeWidth) * 24 / Number(size2) : strokeWidth,
+      className: mergeClasses("lucide", className),
+      ...!children && !hasA11yProp(rest) && { "aria-hidden": "true" },
+      ...rest
+    },
+    [
+      ...iconNode.map(([tag, attrs]) => reactExports.createElement(tag, attrs)),
+      ...Array.isArray(children) ? children : [children]
+    ]
+  )
 );
 const createLucideIcon = (iconName, iconNode) => {
   const Component = reactExports.forwardRef(
     ({ className, ...props2 }, ref) => reactExports.createElement(Icon, {
       ref,
       iconNode,
-      className: mergeClasses(`lucide-${toKebabCase(iconName)}`, className),
+      className: mergeClasses(
+        `lucide-${toKebabCase(toPascalCase(iconName))}`,
+        `lucide-${iconName}`,
+        className
+      ),
       ...props2
     })
   );
-  Component.displayName = `${iconName}`;
+  Component.displayName = toPascalCase(iconName);
   return Component;
 };
-const BookOpen = createLucideIcon("BookOpen", [
+const __iconNode$G = [
+  ["path", { d: "M5 12h14", key: "1ays0h" }],
+  ["path", { d: "m12 5 7 7-7 7", key: "xquz4c" }]
+];
+const ArrowRight = createLucideIcon("arrow-right", __iconNode$G);
+const __iconNode$F = [
   ["path", { d: "M12 7v14", key: "1akyts" }],
   [
     "path",
@@ -16808,78 +17625,90 @@ const BookOpen = createLucideIcon("BookOpen", [
       key: "ruj8y"
     }
   ]
-]);
-const Check = createLucideIcon("Check", [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]]);
-const ChevronDown = createLucideIcon("ChevronDown", [
-  ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
-]);
-const ChevronRight = createLucideIcon("ChevronRight", [
-  ["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]
-]);
-const ChevronUp = createLucideIcon("ChevronUp", [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]]);
-const ChevronsUpDown = createLucideIcon("ChevronsUpDown", [
+];
+const BookOpen = createLucideIcon("book-open", __iconNode$F);
+const __iconNode$E = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
+const Check = createLucideIcon("check", __iconNode$E);
+const __iconNode$D = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
+const ChevronDown = createLucideIcon("chevron-down", __iconNode$D);
+const __iconNode$C = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
+const ChevronRight = createLucideIcon("chevron-right", __iconNode$C);
+const __iconNode$B = [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]];
+const ChevronUp = createLucideIcon("chevron-up", __iconNode$B);
+const __iconNode$A = [
   ["path", { d: "m7 15 5 5 5-5", key: "1hf1tw" }],
   ["path", { d: "m7 9 5-5 5 5", key: "sgt6xg" }]
-]);
-const CircleAlert = createLucideIcon("CircleAlert", [
+];
+const ChevronsUpDown = createLucideIcon("chevrons-up-down", __iconNode$A);
+const __iconNode$z = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
   ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
-]);
-const CircleCheck = createLucideIcon("CircleCheck", [
+];
+const CircleAlert = createLucideIcon("circle-alert", __iconNode$z);
+const __iconNode$y = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
-]);
-const CircleHelp = createLucideIcon("CircleHelp", [
+];
+const CircleCheck = createLucideIcon("circle-check", __iconNode$y);
+const __iconNode$x = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", key: "1u773s" }],
   ["path", { d: "M12 17h.01", key: "p32p05" }]
-]);
-const Circle = createLucideIcon("Circle", [
+];
+const CircleQuestionMark = createLucideIcon("circle-question-mark", __iconNode$x);
+const __iconNode$w = [["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]];
+const Circle = createLucideIcon("circle", __iconNode$w);
+const __iconNode$v = [
+  ["path", { d: "M12 6v6l4 2", key: "mmk7yg" }],
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]
-]);
-const Clock = createLucideIcon("Clock", [
-  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
-  ["polyline", { points: "12 6 12 12 16 14", key: "68esgv" }]
-]);
-const CloudOff = createLucideIcon("CloudOff", [
+];
+const Clock = createLucideIcon("clock", __iconNode$v);
+const __iconNode$u = [
   ["path", { d: "m2 2 20 20", key: "1ooewy" }],
   ["path", { d: "M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193", key: "yfwify" }],
   [
     "path",
     { d: "M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07", key: "jlfiyv" }
   ]
-]);
-const Cloud = createLucideIcon("Cloud", [
+];
+const CloudOff = createLucideIcon("cloud-off", __iconNode$u);
+const __iconNode$t = [
   ["path", { d: "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z", key: "p7xjir" }]
-]);
-const Copy = createLucideIcon("Copy", [
+];
+const Cloud = createLucideIcon("cloud", __iconNode$t);
+const __iconNode$s = [
   ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2", key: "17jyea" }],
   ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2", key: "zix9uf" }]
-]);
-const Database = createLucideIcon("Database", [
+];
+const Copy = createLucideIcon("copy", __iconNode$s);
+const __iconNode$r = [
   ["ellipse", { cx: "12", cy: "5", rx: "9", ry: "3", key: "msslwz" }],
   ["path", { d: "M3 5V19A9 3 0 0 0 21 19V5", key: "1wlel7" }],
   ["path", { d: "M3 12A9 3 0 0 0 21 12", key: "mv7ke4" }]
-]);
-const Download = createLucideIcon("Download", [
+];
+const Database = createLucideIcon("database", __iconNode$r);
+const __iconNode$q = [
+  ["path", { d: "M12 15V3", key: "m9g1x1" }],
   ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
-  ["polyline", { points: "7 10 12 15 17 10", key: "2ggqvy" }],
-  ["line", { x1: "12", x2: "12", y1: "15", y2: "3", key: "1vk2je" }]
-]);
-const ExternalLink = createLucideIcon("ExternalLink", [
+  ["path", { d: "m7 10 5 5 5-5", key: "brsn70" }]
+];
+const Download = createLucideIcon("download", __iconNode$q);
+const __iconNode$p = [
   ["path", { d: "M15 3h6v6", key: "1q9fwt" }],
   ["path", { d: "M10 14 21 3", key: "gplh6r" }],
   ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", key: "a6xqqp" }]
-]);
-const FileText = createLucideIcon("FileText", [
+];
+const ExternalLink = createLucideIcon("external-link", __iconNode$p);
+const __iconNode$o = [
   ["path", { d: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z", key: "1rqfz7" }],
   ["path", { d: "M14 2v4a2 2 0 0 0 2 2h4", key: "tnqrlb" }],
   ["path", { d: "M10 9H8", key: "b1mrlr" }],
   ["path", { d: "M16 13H8", key: "t4e002" }],
   ["path", { d: "M16 17H8", key: "z1uh3a" }]
-]);
-const FolderOpen = createLucideIcon("FolderOpen", [
+];
+const FileText = createLucideIcon("file-text", __iconNode$o);
+const __iconNode$n = [
   [
     "path",
     {
@@ -16887,8 +17716,9 @@ const FolderOpen = createLucideIcon("FolderOpen", [
       key: "usdka0"
     }
   ]
-]);
-const Folder$1 = createLucideIcon("Folder", [
+];
+const FolderOpen = createLucideIcon("folder-open", __iconNode$n);
+const __iconNode$m = [
   [
     "path",
     {
@@ -16896,36 +17726,46 @@ const Folder$1 = createLucideIcon("Folder", [
       key: "1kt360"
     }
   ]
-]);
-const Globe = createLucideIcon("Globe", [
+];
+const Folder$1 = createLucideIcon("folder", __iconNode$m);
+const __iconNode$l = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20", key: "13o1zl" }],
   ["path", { d: "M2 12h20", key: "9i4pu4" }]
-]);
-const House = createLucideIcon("House", [
+];
+const Globe = createLucideIcon("globe", __iconNode$l);
+const __iconNode$k = [
   ["path", { d: "M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8", key: "5wwlr5" }],
   [
     "path",
     {
-      d: "M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
-      key: "1d0kgt"
+      d: "M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+      key: "r6nss1"
     }
   ]
-]);
-const Image = createLucideIcon("Image", [
+];
+const House = createLucideIcon("house", __iconNode$k);
+const __iconNode$j = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2", key: "1m3agn" }],
   ["circle", { cx: "9", cy: "9", r: "2", key: "af1f0g" }],
   ["path", { d: "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21", key: "1xmnt7" }]
-]);
-const LoaderCircle = createLucideIcon("LoaderCircle", [
-  ["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]
-]);
-const LogOut = createLucideIcon("LogOut", [
-  ["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", key: "1uf3rs" }],
-  ["polyline", { points: "16 17 21 12 16 7", key: "1gabdz" }],
-  ["line", { x1: "21", x2: "9", y1: "12", y2: "12", key: "1uyos4" }]
-]);
-const MapPin = createLucideIcon("MapPin", [
+];
+const Image = createLucideIcon("image", __iconNode$j);
+const __iconNode$i = [
+  ["path", { d: "M9 17H7A5 5 0 0 1 7 7h2", key: "8i5ue5" }],
+  ["path", { d: "M15 7h2a5 5 0 1 1 0 10h-2", key: "1b9ql8" }],
+  ["line", { x1: "8", x2: "16", y1: "12", y2: "12", key: "1jonct" }]
+];
+const Link2 = createLucideIcon("link-2", __iconNode$i);
+const __iconNode$h = [["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]];
+const LoaderCircle = createLucideIcon("loader-circle", __iconNode$h);
+const __iconNode$g = [
+  ["path", { d: "m16 17 5-5-5-5", key: "1bji2h" }],
+  ["path", { d: "M21 12H9", key: "dn1m92" }],
+  ["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", key: "1uf3rs" }]
+];
+const LogOut = createLucideIcon("log-out", __iconNode$g);
+const __iconNode$f = [
   [
     "path",
     {
@@ -16934,51 +17774,79 @@ const MapPin = createLucideIcon("MapPin", [
     }
   ],
   ["circle", { cx: "12", cy: "10", r: "3", key: "ilqhr7" }]
-]);
-const Monitor = createLucideIcon("Monitor", [
+];
+const MapPin = createLucideIcon("map-pin", __iconNode$f);
+const __iconNode$e = [
   ["rect", { width: "20", height: "14", x: "2", y: "3", rx: "2", key: "48i651" }],
   ["line", { x1: "8", x2: "16", y1: "21", y2: "21", key: "1svkeh" }],
   ["line", { x1: "12", x2: "12", y1: "17", y2: "21", key: "vw1qmm" }]
-]);
-const Moon = createLucideIcon("Moon", [
-  ["path", { d: "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z", key: "a7tn18" }]
-]);
-const Play = createLucideIcon("Play", [
-  ["polygon", { points: "6 3 20 12 6 21 6 3", key: "1oa8hb" }]
-]);
-const Plus = createLucideIcon("Plus", [
+];
+const Monitor = createLucideIcon("monitor", __iconNode$e);
+const __iconNode$d = [
+  [
+    "path",
+    {
+      d: "M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401",
+      key: "kfwtm"
+    }
+  ]
+];
+const Moon = createLucideIcon("moon", __iconNode$d);
+const __iconNode$c = [
+  [
+    "path",
+    {
+      d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+      key: "10ikf1"
+    }
+  ]
+];
+const Play = createLucideIcon("play", __iconNode$c);
+const __iconNode$b = [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
   ["path", { d: "M12 5v14", key: "s699le" }]
-]);
-const RefreshCw = createLucideIcon("RefreshCw", [
+];
+const Plus = createLucideIcon("plus", __iconNode$b);
+const __iconNode$a = [
   ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", key: "v9h5vc" }],
   ["path", { d: "M21 3v5h-5", key: "1q7to0" }],
   ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", key: "3uifl3" }],
   ["path", { d: "M8 16H3v5", key: "1cv678" }]
-]);
-const RotateCcw = createLucideIcon("RotateCcw", [
+];
+const RefreshCw = createLucideIcon("refresh-cw", __iconNode$a);
+const __iconNode$9 = [
   ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "1357e3" }],
   ["path", { d: "M3 3v5h5", key: "1xhq8a" }]
-]);
-const Search = createLucideIcon("Search", [
-  ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }],
-  ["path", { d: "m21 21-4.3-4.3", key: "1qie3q" }]
-]);
-const Settings = createLucideIcon("Settings", [
+];
+const RotateCcw = createLucideIcon("rotate-ccw", __iconNode$9);
+const __iconNode$8 = [
+  ["path", { d: "m21 21-4.34-4.34", key: "14j7rj" }],
+  ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }]
+];
+const Search = createLucideIcon("search", __iconNode$8);
+const __iconNode$7 = [
   [
     "path",
     {
-      d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
-      key: "1qme2f"
+      d: "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
+      key: "1i5ecw"
     }
   ],
   ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
-]);
-const SkipForward = createLucideIcon("SkipForward", [
-  ["polygon", { points: "5 4 15 12 5 20 5 4", key: "16p6eg" }],
-  ["line", { x1: "19", x2: "19", y1: "5", y2: "19", key: "futhcm" }]
-]);
-const SquarePen = createLucideIcon("SquarePen", [
+];
+const Settings = createLucideIcon("settings", __iconNode$7);
+const __iconNode$6 = [
+  ["path", { d: "M21 4v16", key: "7j8fe9" }],
+  [
+    "path",
+    {
+      d: "M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z",
+      key: "zs4d6"
+    }
+  ]
+];
+const SkipForward = createLucideIcon("skip-forward", __iconNode$6);
+const __iconNode$5 = [
   ["path", { d: "M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", key: "1m0v6g" }],
   [
     "path",
@@ -16987,8 +17855,9 @@ const SquarePen = createLucideIcon("SquarePen", [
       key: "ohrbg2"
     }
   ]
-]);
-const Sun = createLucideIcon("Sun", [
+];
+const SquarePen = createLucideIcon("square-pen", __iconNode$5);
+const __iconNode$4 = [
   ["circle", { cx: "12", cy: "12", r: "4", key: "4exip2" }],
   ["path", { d: "M12 2v2", key: "tus03m" }],
   ["path", { d: "M12 20v2", key: "1lh1kg" }],
@@ -16998,15 +17867,17 @@ const Sun = createLucideIcon("Sun", [
   ["path", { d: "M20 12h2", key: "1q8mjw" }],
   ["path", { d: "m6.34 17.66-1.41 1.41", key: "1m8zz5" }],
   ["path", { d: "m19.07 4.93-1.41 1.41", key: "1shlcs" }]
-]);
-const Trash2 = createLucideIcon("Trash2", [
+];
+const Sun = createLucideIcon("sun", __iconNode$4);
+const __iconNode$3 = [
+  ["path", { d: "M10 11v6", key: "nco0om" }],
+  ["path", { d: "M14 11v6", key: "outv1u" }],
+  ["path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6", key: "miytrc" }],
   ["path", { d: "M3 6h18", key: "d0wm0j" }],
-  ["path", { d: "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", key: "4alrt4" }],
-  ["path", { d: "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", key: "v07s0e" }],
-  ["line", { x1: "10", x2: "10", y1: "11", y2: "17", key: "1uufr5" }],
-  ["line", { x1: "14", x2: "14", y1: "11", y2: "17", key: "xtxkd" }]
-]);
-const TriangleAlert = createLucideIcon("TriangleAlert", [
+  ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", key: "e791ji" }]
+];
+const Trash2 = createLucideIcon("trash-2", __iconNode$3);
+const __iconNode$2 = [
   [
     "path",
     {
@@ -17016,16 +17887,19 @@ const TriangleAlert = createLucideIcon("TriangleAlert", [
   ],
   ["path", { d: "M12 9v4", key: "juzpu7" }],
   ["path", { d: "M12 17h.01", key: "p32p05" }]
-]);
-const Upload = createLucideIcon("Upload", [
-  ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
-  ["polyline", { points: "17 8 12 3 7 8", key: "t8dd8p" }],
-  ["line", { x1: "12", x2: "12", y1: "3", y2: "15", key: "widbto" }]
-]);
-const X$2 = createLucideIcon("X", [
+];
+const TriangleAlert = createLucideIcon("triangle-alert", __iconNode$2);
+const __iconNode$1 = [
+  ["path", { d: "M12 3v12", key: "1x0j5s" }],
+  ["path", { d: "m17 8-5-5-5 5", key: "7q97r8" }],
+  ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }]
+];
+const Upload = createLucideIcon("upload", __iconNode$1);
+const __iconNode = [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
   ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
-]);
+];
+const X$2 = createLucideIcon("x", __iconNode);
 const ToastProvider = Provider$1;
 const ToastViewport = reactExports.forwardRef(({ className, ...props2 }, ref) => /* @__PURE__ */ jsxRuntimeExports.jsx(
   Viewport$1,
@@ -22065,7 +22939,7 @@ function createAuditEntry(locationId, action, diff, user) {
     diff
   };
 }
-function esc(val) {
+function esc$1(val) {
   const s2 = val ?? "";
   return s2.includes(",") || s2.includes('"') || s2.includes("\n") ? `"${s2.replace(/"/g, '""')}"` : s2;
 }
@@ -22341,14 +23215,14 @@ function useLocationStore() {
     const headers = ["Site Name", "Account Number", "State", "City", "Address", "Instructions", "Video URL", "Image URL"];
     const rows = appState.locations.map(
       (loc) => [
-        esc(loc.siteName),
-        esc(loc.accountNumber),
-        esc(loc.state),
-        esc(loc.city),
-        esc(loc.address),
-        esc(loc.instructions),
-        esc(loc.videoUrl),
-        esc(loc.imageUrl)
+        esc$1(loc.siteName),
+        esc$1(loc.accountNumber),
+        esc$1(loc.state),
+        esc$1(loc.city),
+        esc$1(loc.address),
+        esc$1(loc.instructions),
+        esc$1(loc.videoUrl),
+        esc$1(loc.imageUrl)
       ].join(",")
     );
     const csv = [headers.join(","), ...rows].join("\n");
@@ -25304,6 +26178,7 @@ function TopBar({
   onOpenSettings,
   onOpenBackup,
   onOpenImport,
+  onOpenGenerateLinks,
   dropboxUser
 }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0", children: [
@@ -25372,6 +26247,10 @@ function TopBar({
         /* @__PURE__ */ jsxRuntimeExports.jsx(Upload, { className: "w-4 h-4 mr-2" }),
         "Import"
       ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", onClick: onOpenGenerateLinks, "data-testid": "button-generate-links", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Link2, { className: "w-4 h-4 mr-2" }),
+        "Generate Links"
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(DropdownMenu, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", "data-testid": "button-export", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(Download, { className: "w-4 h-4 mr-2" }),
@@ -25415,7 +26294,7 @@ function TopBar({
         /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipContent, { children: "Settings & Dropbox" })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(DropdownMenu, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "ghost", size: "icon", "data-testid": "button-help", children: /* @__PURE__ */ jsxRuntimeExports.jsx(CircleHelp, { className: "w-5 h-5" }) }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "ghost", size: "icon", "data-testid": "button-help", children: /* @__PURE__ */ jsxRuntimeExports.jsx(CircleQuestionMark, { className: "w-5 h-5" }) }) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuContent, { align: "end", className: "w-64", children: /* @__PURE__ */ jsxRuntimeExports.jsx(HelpMenu, { onStartTour, onOpenBackup }) })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pl-3 border-l flex items-center gap-1.5", children: [
@@ -63292,13 +64171,22 @@ function PreviewStep({
     ] })
   ] });
 }
-function CsvImport({ open: open2, onOpenChange, existingLocations, onImport }) {
+function CsvImport({ open: open2, onOpenChange, existingLocations, onImport, seedData }) {
   const [step, setStep] = reactExports.useState("upload");
   const [csvHeaders, setCsvHeaders] = reactExports.useState([]);
   const [csvRows, setCsvRows] = reactExports.useState([]);
   const [columnMap, setColumnMap] = reactExports.useState({});
   const [previewRows, setPreviewRows] = reactExports.useState([]);
   const [fileName, setFileName] = reactExports.useState("");
+  reactExports.useEffect(() => {
+    if (open2 && seedData) {
+      setCsvHeaders(seedData.headers);
+      setCsvRows(seedData.rows);
+      setColumnMap(autoMapColumns(seedData.headers));
+      setFileName("__generated_links__");
+      setStep("map");
+    }
+  }, [open2]);
   const reset = () => {
     setStep("upload");
     setCsvHeaders([]);
@@ -63343,7 +64231,7 @@ function CsvImport({ open: open2, onOpenChange, existingLocations, onImport }) {
   };
   const handleConfirm = () => {
     const toImport = previewRows.filter((r2) => !r2.skip && r2.mapped !== null).map((r2) => r2.mapped);
-    const source = /\.(xlsx|xls)$/i.test(fileName) ? "Excel import" : "CSV import";
+    const source = /\.(xlsx|xls)$/i.test(fileName) ? "Excel import" : fileName === "__generated_links__" ? "Dropbox link generator" : "CSV import";
     onImport(toImport, source);
     onOpenChange(false);
     reset();
@@ -63394,6 +64282,422 @@ function CsvImport({ open: open2, onOpenChange, existingLocations, onImport }) {
           onToggleSkip: handleToggleSkip
         }
       )
+    ] })
+  ] }) });
+}
+function parseVideoFilename(name) {
+  const base = name.replace(/\.[^.]+$/, "").trim();
+  const spaceMatch = base.match(/^([^\s].+?)\s+-\s+(.+)$/);
+  if (spaceMatch) {
+    return {
+      accountNumber: spaceMatch[1].trim(),
+      parsedSiteName: spaceMatch[2].trim()
+    };
+  }
+  const dashMatch = base.match(/^(\d+)-(.+)$/);
+  if (dashMatch) {
+    const siteName = dashMatch[2].replace(/-+/g, " ").toLowerCase().replace(/\b\w/g, (c2) => c2.toUpperCase()).trim();
+    return { accountNumber: dashMatch[1], parsedSiteName: siteName };
+  }
+  return {
+    accountNumber: "",
+    parsedSiteName: base.replace(/[-_]+/g, " ").trim()
+  };
+}
+function normaliseAcct(s2) {
+  return s2.trim().replace(/\s+/g, " ");
+}
+function esc(v2) {
+  return v2.includes(",") || v2.includes('"') || v2.includes("\n") ? `"${v2.replace(/"/g, '""')}"` : v2;
+}
+function buildCsv(matched, unmatched) {
+  const header = "Account Number,Site Name,Old Video URL,New Video URL,Status";
+  const mRows = matched.map(
+    (r2) => [esc(r2.accountNumber), esc(r2.siteName), esc(r2.oldVideoUrl ?? ""), esc(r2.newVideoUrl), "matched"].join(",")
+  );
+  const uRows = unmatched.filter((r2) => r2.url).map(
+    (r2) => [esc(r2.parsedAccount), esc(r2.parsedSiteName), "", esc(r2.url), "unmatched"].join(",")
+  );
+  return [header, ...mRows, ...uRows].join("\n");
+}
+function GenerateLinksDialog({
+  open: open2,
+  onOpenChange,
+  existingLocations,
+  onApplyUpdates,
+  onSendToImport
+}) {
+  useToast();
+  const [folderPath, setFolderPath] = reactExports.useState("");
+  const [status, setStatus] = reactExports.useState("idle");
+  const [errorMsg, setErrorMsg] = reactExports.useState("");
+  const [matched, setMatched] = reactExports.useState([]);
+  const [unmatched, setUnmatched] = reactExports.useState([]);
+  const [scanErrors, setScanErrors] = reactExports.useState([]);
+  const [activeTab, setActiveTab] = reactExports.useState("matched");
+  const [appliedCount, setAppliedCount] = reactExports.useState(0);
+  reactExports.useEffect(() => {
+    if (open2 && !folderPath) {
+      window.electronAPI.settings.get().then((s2) => {
+        setFolderPath(s2.dropboxFolderPath || "");
+      });
+    }
+  }, [open2]);
+  const handleClose = (o2) => {
+    if (!o2) {
+      setStatus("idle");
+      setMatched([]);
+      setUnmatched([]);
+      setScanErrors([]);
+      setErrorMsg("");
+      setActiveTab("matched");
+    }
+    onOpenChange(o2);
+  };
+  const handleScan = reactExports.useCallback(async () => {
+    const path = folderPath.trim();
+    if (!path) return;
+    setStatus("loading");
+    setMatched([]);
+    setUnmatched([]);
+    setScanErrors([]);
+    setErrorMsg("");
+    try {
+      const res = await window.electronAPI.dropbox.generateLinks(path);
+      if (!res.ok) {
+        setErrorMsg(res.error ?? "Unknown error from Dropbox");
+        setStatus("error");
+        return;
+      }
+      const results = res.results ?? [];
+      const good = results.filter((r2) => r2.url);
+      const bad = results.filter((r2) => !r2.url);
+      setScanErrors(bad);
+      const byAccount = /* @__PURE__ */ new Map();
+      for (const loc of existingLocations) {
+        const key = normaliseAcct(loc.accountNumber ?? "");
+        if (key) byAccount.set(key.toLowerCase(), loc);
+      }
+      const newMatched = [];
+      const newUnmatched = [];
+      for (const raw of good) {
+        const { accountNumber, parsedSiteName } = parseVideoFilename(raw.name);
+        const loc = accountNumber ? byAccount.get(normaliseAcct(accountNumber).toLowerCase()) : void 0;
+        if (loc) {
+          newMatched.push({
+            id: loc.id,
+            accountNumber: loc.accountNumber,
+            siteName: loc.siteName,
+            oldVideoUrl: loc.videoUrl,
+            newVideoUrl: raw.url
+          });
+        } else {
+          newUnmatched.push({
+            name: raw.name,
+            parsedAccount: accountNumber,
+            parsedSiteName,
+            url: raw.url
+          });
+        }
+      }
+      setMatched(newMatched);
+      setUnmatched(newUnmatched);
+      setActiveTab(newMatched.length > 0 ? "matched" : "unmatched");
+      setStatus("review");
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStatus("error");
+    }
+  }, [folderPath, existingLocations]);
+  const handleApply = () => {
+    if (matched.length === 0) return;
+    onApplyUpdates(matched);
+    setAppliedCount(matched.length);
+    setStatus("done");
+  };
+  const handleExportCsv = () => {
+    const csv = buildCsv(matched, unmatched);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a2 = document.createElement("a");
+    a2.href = url;
+    a2.download = `dropbox-video-links-${Date.now()}.csv`;
+    a2.click();
+    URL.revokeObjectURL(url);
+  };
+  const handleSendUnmatchedToImport = () => {
+    if (!onSendToImport) return;
+    const headers = ["Site Name", "Account Number", "Video URL"];
+    const rows = unmatched.filter((u2) => u2.url).map((u2) => ({
+      "Site Name": u2.parsedSiteName,
+      "Account Number": u2.parsedAccount,
+      "Video URL": u2.url
+    }));
+    onSendToImport(headers, rows);
+    handleClose(false);
+  };
+  const totalFiles = matched.length + unmatched.length + scanErrors.length;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(Dialog, { open: open2, onOpenChange: handleClose, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogContent, { className: "max-w-3xl flex flex-col max-h-[88vh]", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogHeader, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(DialogTitle, { className: "flex items-center gap-2", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Link2, { className: "w-5 h-5" }),
+        "Update Video Links from Dropbox"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(DialogDescription, { children: "Scan a Dropbox folder, generate public shareable links, then apply them directly to matching location records. Existing links are never duplicated." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Separator, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 items-end pt-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Label, { htmlFor: "genFolderPath", className: "mb-1.5 block", children: "Dropbox Folder Path" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          Input,
+          {
+            id: "genFolderPath",
+            value: folderPath,
+            onChange: (e) => setFolderPath(e.target.value),
+            placeholder: "/Delivery Optimization/Delivery Walk Through Videos/Completed and Labeled Videos",
+            disabled: status === "loading",
+            onKeyDown: (e) => e.key === "Enter" && handleScan()
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-muted-foreground mt-1", children: [
+          "Only files directly inside this folder are scanned — subfolders are ignored. Filenames must follow the",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-mono text-[10px]", children: "### - Site Name" }),
+          " pattern."
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        Button,
+        {
+          onClick: handleScan,
+          disabled: !folderPath.trim() || status === "loading",
+          className: "mb-6 shrink-0",
+          children: status === "loading" ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "w-4 h-4 mr-2 animate-spin" }),
+            "Scanning…"
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Link2, { className: "w-4 h-4 mr-2" }),
+            "Scan Folder"
+          ] })
+        }
+      )
+    ] }),
+    status === "loading" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center py-16 gap-3 text-center", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "w-8 h-8 animate-spin text-primary" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium", children: "Scanning folder and generating links…" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-muted-foreground max-w-xs", children: "Files are processed in parallel. Large folders (100 + files) may take 20–30 seconds." })
+    ] }),
+    status === "error" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start gap-3 bg-destructive/5 border border-destructive/20 rounded-md p-3", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(TriangleAlert, { className: "w-4 h-4 text-destructive shrink-0 mt-0.5" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-destructive", children: "Could not scan folder" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-muted-foreground mt-0.5", children: errorMsg }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-muted-foreground mt-1", children: [
+          "Check the path starts with ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("code", { className: "text-[10px]", children: "/" }),
+          " and your Dropbox connection is active."
+        ] })
+      ] })
+    ] }),
+    status === "review" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col gap-3 min-h-0 flex-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 flex-wrap text-sm", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-muted-foreground", children: [
+          totalFiles,
+          " file",
+          totalFiles !== 1 ? "s" : "",
+          " scanned"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-muted-foreground", children: "·" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(Badge, { className: "bg-blue-600 hover:bg-blue-600 gap-1", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { className: "w-3 h-3" }),
+          matched.length,
+          " location",
+          matched.length !== 1 ? "s" : "",
+          " matched"
+        ] }),
+        unmatched.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(Badge, { variant: "outline", className: "gap-1 text-amber-700 border-amber-400", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(TriangleAlert, { className: "w-3 h-3" }),
+          unmatched.length,
+          " unmatched"
+        ] }),
+        scanErrors.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(Badge, { variant: "destructive", className: "gap-1", children: [
+          scanErrors.length,
+          " link error",
+          scanErrors.length !== 1 ? "s" : ""
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-1 border-b", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            onClick: () => setActiveTab("matched"),
+            className: `px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === "matched" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`,
+            children: [
+              "Matched (",
+              matched.length,
+              ")"
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            onClick: () => setActiveTab("unmatched"),
+            className: `px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === "unmatched" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`,
+            children: [
+              "Unmatched (",
+              unmatched.length,
+              ")"
+            ]
+          }
+        )
+      ] }),
+      activeTab === "matched" && /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: matched.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center py-10 text-center gap-2", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(TriangleAlert, { className: "w-8 h-8 text-muted-foreground" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium", children: "No locations matched" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-muted-foreground max-w-xs", children: [
+          "None of the filenames could be matched to an existing location by account number. Check the",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Unmatched" }),
+          " tab to see what was found."
+        ] })
+      ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ScrollArea, { className: "flex-1 border rounded-md", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "divide-y text-sm", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "grid grid-cols-[1fr_2fr_2fr] gap-3 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Account / Site" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Current Video URL" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "New Video URL" })
+        ] }),
+        matched.map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "grid grid-cols-[1fr_2fr_2fr] gap-3 px-3 py-2.5 items-start", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-medium truncate", children: m2.siteName }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-muted-foreground font-mono", children: [
+              "#",
+              m2.accountNumber
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "min-w-0 pt-0.5", children: m2.oldVideoUrl ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "a",
+            {
+              href: m2.oldVideoUrl,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              className: "text-xs text-muted-foreground hover:text-foreground hover:underline truncate flex items-center gap-1",
+              title: m2.oldVideoUrl,
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: m2.oldVideoUrl.replace(/^https?:\/\//, "") }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(ExternalLink, { className: "w-3 h-3 shrink-0" })
+              ]
+            }
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs italic text-muted-foreground", children: "none" }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "min-w-0 pt-0.5 flex items-start gap-1", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(ArrowRight, { className: "w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "a",
+              {
+                href: m2.newVideoUrl,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                className: "text-xs text-blue-600 hover:underline truncate flex items-center gap-1 min-w-0",
+                title: m2.newVideoUrl,
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: m2.newVideoUrl.replace("https://www.dropbox.com", "dropbox.com") }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(ExternalLink, { className: "w-3 h-3 shrink-0" })
+                ]
+              }
+            )
+          ] })
+        ] }, m2.id))
+      ] }) }) }),
+      activeTab === "unmatched" && /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: unmatched.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center py-10 text-center gap-2", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { className: "w-8 h-8 text-green-500" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-green-700", children: "All files matched" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-muted-foreground", children: "Every file in the folder was matched to an existing location." })
+      ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ScrollArea, { className: "flex-1 border rounded-md", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "divide-y text-sm", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground", children: "These files have no matching location (by account number). They won't be updated. Use the Import Wizard to add them as new records." }),
+        unmatched.map((u2, i2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-2.5 flex items-start justify-between gap-3", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-medium truncate", children: u2.name }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-muted-foreground", children: [
+              "Parsed account:",
+              " ",
+              u2.parsedAccount ? /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "font-mono", children: [
+                "#",
+                u2.parsedAccount
+              ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "italic", children: "could not parse account number" })
+            ] })
+          ] }),
+          u2.url && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "a",
+            {
+              href: u2.url,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              className: "text-xs text-blue-600 hover:underline shrink-0 flex items-center gap-1",
+              children: [
+                "Link ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx(ExternalLink, { className: "w-3 h-3" })
+              ]
+            }
+          )
+        ] }, i2))
+      ] }) }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between pt-1 shrink-0", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", size: "sm", onClick: handleExportCsv, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Download, { className: "w-4 h-4 mr-2" }),
+            "Export CSV"
+          ] }),
+          unmatched.length > 0 && onSendToImport && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            Button,
+            {
+              variant: "outline",
+              size: "sm",
+              onClick: handleSendUnmatchedToImport,
+              title: "Send unmatched files to the Import Wizard to create new locations",
+              children: [
+                "Import Unmatched…",
+                /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronRight, { className: "w-4 h-4 ml-1" })
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          Button,
+          {
+            size: "sm",
+            onClick: handleApply,
+            disabled: matched.length === 0,
+            className: "gap-2",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { className: "w-4 h-4" }),
+              "Apply Updates (",
+              matched.length,
+              ")"
+            ]
+          }
+        )
+      ] })
+    ] }),
+    status === "done" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center py-16 gap-4 text-center", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "w-14 h-14 rounded-full bg-green-100 flex items-center justify-center", children: /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { className: "w-8 h-8 text-green-600" }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-base font-semibold", children: [
+          appliedCount,
+          " video link",
+          appliedCount !== 1 ? "s" : "",
+          " updated"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-muted-foreground mt-1", children: "Changes are staged and ready to publish. Each update was logged in the audit trail." })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2", children: [
+        unmatched.length > 0 && onSendToImport && /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", size: "sm", onClick: handleSendUnmatchedToImport, children: [
+          "Import ",
+          unmatched.length,
+          " Unmatched…"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { size: "sm", onClick: () => handleClose(false), children: "Done" })
+      ] })
     ] })
   ] }) });
 }
@@ -74162,7 +75466,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-BLJhxl7l.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-D1L9zkZU.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -75113,6 +76417,8 @@ function AdminDashboard({ onLogout, initialUser }) {
   const [updateReady, setUpdateReady] = reactExports.useState(false);
   const [downloadProgress, setDownloadProgress] = reactExports.useState(null);
   const [importOpen, setImportOpen] = reactExports.useState(false);
+  const [importSeedData, setImportSeedData] = reactExports.useState(void 0);
+  const [generateLinksOpen, setGenerateLinksOpen] = reactExports.useState(false);
   const [backups, setBackups] = reactExports.useState([]);
   const [backupsLoading, setBackupsLoading] = reactExports.useState(false);
   const imageCache = reactExports.useRef(/* @__PURE__ */ new Map());
@@ -75314,7 +76620,11 @@ function AdminDashboard({ onLogout, initialUser }) {
         },
         onOpenSettings: () => setSettingsOpen(true),
         onOpenBackup: () => setBackupOpen(true),
-        onOpenImport: () => setImportOpen(true),
+        onOpenImport: () => {
+          setImportSeedData(void 0);
+          setImportOpen(true);
+        },
+        onOpenGenerateLinks: () => setGenerateLinksOpen(true),
         dropboxUser,
         updateReady
       }
@@ -75472,12 +76782,33 @@ function AdminDashboard({ onLogout, initialUser }) {
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
+      GenerateLinksDialog,
+      {
+        open: generateLinksOpen,
+        onOpenChange: setGenerateLinksOpen,
+        existingLocations: state.locations,
+        onApplyUpdates: (updates) => {
+          updates.forEach((u2) => updateLocation(u2.id, { videoUrl: u2.newVideoUrl }));
+          toast2({
+            title: `${updates.length} video link${updates.length !== 1 ? "s" : ""} updated`,
+            description: "Changes are staged and ready to publish."
+          });
+        },
+        onSendToImport: (headers, rows) => {
+          setImportSeedData({ headers, rows });
+          setGenerateLinksOpen(false);
+          setImportOpen(true);
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
       CsvImport,
       {
         open: importOpen,
         onOpenChange: setImportOpen,
         existingLocations: state.locations,
-        onImport: handleImportLocations
+        onImport: handleImportLocations,
+        seedData: importSeedData
       }
     ),
     isTourActive && TOUR_STEPS[tourStepIndex] && /* @__PURE__ */ jsxRuntimeExports.jsx(

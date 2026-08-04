@@ -31,22 +31,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Node.js ───────────────────────────────────────────────────────────
+      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: electron-app/package-lock.json
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       # ── 3. Install system build tools ────────────────────────────────────────
       - name: Install system build tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fakeroot dpkg
 
       # ── 4. Install Node dependencies ─────────────────────────────────────────
+      #
+      # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
+      # Install from the workspace root so pnpm resolves catalog: specifiers.
       - name: Install dependencies
-        working-directory: electron-app
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # ── 5. Copy shared components from the web app source ────────────────────
       - name: Copy shared components
@@ -60,7 +65,7 @@ jobs:
       # --publish never ensures nothing is uploaded even if GH_TOKEN were present.
       - name: Build and package
         working-directory: electron-app
-        run: npm run build && electron-builder --linux --publish never
+        run: pnpm run build && electron-builder --linux --publish never
 
       # ── 7. Verify output artifacts ────────────────────────────────────────────
       #

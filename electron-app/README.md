@@ -97,7 +97,7 @@ Push a `v`-prefixed git tag to trigger a CI build (see [Automated CI Builds](#au
 > **Just need to install the app?** Download the installer from the GitHub Releases page — no build tools needed. The steps below are only for developers who need to build or run the app from source.
 
 - **Node.js 18 or later** — download from https://nodejs.org (use the LTS version)
-- **npm** — included with Node.js
+- **pnpm** — install with `npm install -g pnpm` after installing Node.js
 - A **Dropbox account** that has access to the shared folder
 - A Dropbox **App Key** (one-time setup, see below)
 
@@ -130,8 +130,16 @@ Push a `v`-prefixed git tag to trigger a CI build (see [Automated CI Builds](#au
 
 ## Step 2 — Get the Source Code
 
-Clone or copy the `electron-app/` folder from the Replit workspace to your Windows machine.
-You can download it as a zip from Replit, or use git if the repo is connected to GitHub.
+Clone the **entire repository** — not just `electron-app/`. The project uses a pnpm workspace
+where `electron-app/` dependencies are resolved from the root `pnpm-workspace.yaml` catalog,
+so the repo root and `pnpm-lock.yaml` are required for installation.
+
+```bash
+git clone https://github.com/your-org/your-repo.git
+cd your-repo
+```
+
+If the repo is on GitHub you can also download it as a zip (Code → Download ZIP) and extract it.
 
 ---
 
@@ -187,23 +195,25 @@ This copies shadcn/ui primitives, the location tree, forms, import/export, and o
 
 ## Step 5 — Install Dependencies
 
+From the **repository root** (not inside `electron-app/`):
+
 ```
-npm ci
+pnpm install --frozen-lockfile
 ```
 
-This downloads ~200 MB of packages into `node_modules/` using the committed `package-lock.json`
+This downloads ~200 MB of packages into `node_modules/` using the committed `pnpm-lock.yaml`
 so you get the exact same versions used to produce the last known-good build.
-It only needs to be done once (or after a `package-lock.json` update).
+It only needs to be done once (or after a `pnpm-lock.yaml` update).
 
-> **Do not use `npm install`** if you cloned the repo directly — it re-resolves
-> version ranges and may install newer patch versions than were tested.
+> **Run from the repo root**, not from inside `electron-app/` — pnpm must resolve the
+> workspace catalog before it can install this package's dependencies.
 
 ---
 
 ## Step 6 — Build the App
 
 ```
-npm run build
+pnpm run build
 ```
 
 This compiles TypeScript and bundles the renderer with Vite. Output goes to `out/`.
@@ -212,10 +222,10 @@ To verify the build looks right before packaging (no installer created):
 
 ```
 # Windows
-npm run package:dir:win
+pnpm run package:dir:win
 
 # macOS
-npm run package:dir:mac
+pnpm run package:dir:mac
 ```
 
 On Windows, the unpackaged app is in `dist-installer/win-unpacked/NAPA Courier Admin.exe`.
@@ -228,18 +238,18 @@ On macOS, it's in `dist-installer/mac/NAPA Courier Admin.app` — double-click t
 ### Windows
 
 ```
-npm run package:win
+pnpm run package:win
 ```
 
 Output: `dist-installer/NAPA Courier Admin Setup 1.0.0.exe`
 
 Distribute this file to Windows admins. They double-click it and follow the wizard —
-no Node.js or npm needed on their machines.
+no Node.js or pnpm needed on their machines.
 
 ### macOS
 
 ```
-npm run package:mac
+pnpm run package:mac
 ```
 
 Output:
@@ -322,12 +332,12 @@ In the same terminal window where you set `GH_TOKEN`:
 
 **Windows** (run on a Windows machine):
 ```cmd
-npm run publish:win
+pnpm run publish:win
 ```
 
 **macOS** (run on a Mac):
 ```bash
-npm run publish:mac
+pnpm run publish:mac
 ```
 
 This runs `electron-vite build` followed by `electron-builder --publish always`, which:
@@ -422,20 +432,20 @@ After the CA issues your certificate and it is installed on the signing machine:
 ### 3 — Set environment variables before building
 
 electron-builder reads two environment variables at build time. Set them in
-your terminal **before** running `npm run package:win`:
+your terminal **before** running `pnpm run package:win`:
 
 **Command Prompt:**
 ```cmd
 set WIN_CSC_LINK=C:\path\to\napa-courier.pfx
 set WIN_CSC_KEY_PASSWORD=your_pfx_password
-npm run package:win
+pnpm run package:win
 ```
 
 **PowerShell:**
 ```powershell
 $env:WIN_CSC_LINK     = "C:\path\to\napa-courier.pfx"
 $env:WIN_CSC_KEY_PASSWORD = "your_pfx_password"
-npm run package:win
+pnpm run package:win
 ```
 
 - `WIN_CSC_LINK` — absolute path to your `.pfx` file (or a base64-encoded
@@ -568,7 +578,7 @@ Open DevTools and check the Console tab for errors.
 - **macOS:** `Cmd+Option+I` (only available in development builds; in production use `View → Toggle Developer Tools` if the menu is present)
 
 Common causes:
-- Missing `node_modules/` — run `npm ci` and rebuild.
+- Missing `node_modules/` — run `pnpm install --frozen-lockfile` from the repo root and rebuild.
 - `src/` is missing component files — run `setup-components.sh` and rebuild.
 
 ### Cmd+C / Cmd+V / Cmd+Z don't work on macOS
@@ -599,10 +609,10 @@ Delete the encrypted token file and sign in again.
 When the web app source (`artifacts/napa-courier-admin/src/`) is updated with new features:
 
 1. Pull the latest code: `git pull`
-2. Run `npm ci` to pick up any dependency changes.
+2. Run `pnpm install --frozen-lockfile` from the repo root to pick up any dependency changes.
 3. Copy updated shared components — Windows: `"C:\Program Files\Git\bin\bash.exe" setup-components.sh` / Mac/Linux: `bash setup-components.sh`
-4. Run `npm run package:win` (Windows) or `npm run package:mac` (Mac) to produce a new installer.
-4. Distribute the new installer to all admins.
+4. Run `pnpm run package:win` (Windows) or `pnpm run package:mac` (Mac) to produce a new installer.
+5. Distribute the new installer to all admins.
 
 ---
 
