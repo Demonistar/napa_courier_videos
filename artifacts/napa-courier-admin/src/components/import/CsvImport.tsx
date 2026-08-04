@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { Upload, AlertTriangle, CheckCircle2, SkipForward, ChevronRight, FileText, X, Download } from 'lucide-react';
 import {
   Dialog,
@@ -50,6 +51,48 @@ interface CsvImportProps {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const SKIP_VALUE = '__skip__';
+
+const ACCEPTED_EXTENSIONS = /\.(csv|txt|xlsx|xls)$/i;
+const ACCEPTED_MIME = [
+  'text/csv',
+  'text/plain',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+];
+
+/**
+ * Parse the first sheet of an Excel workbook (ArrayBuffer) into the same
+ * {headers, rows} shape that parseCsv produces.
+ */
+function parseXlsx(buffer: ArrayBuffer): { headers: string[]; rows: Record<string, string>[] } {
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return { headers: [], rows: [] };
+
+  const sheet = workbook.Sheets[sheetName];
+  // header:1 gives us an array-of-arrays; defval keeps empty cells as ''
+  const data = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: '' });
+  if (data.length === 0) return { headers: [], rows: [] };
+
+  const rawHeaders = data[0] as unknown[];
+  const headers = rawHeaders.map((h) => String(h ?? '').trim()).filter(Boolean);
+  if (headers.length === 0) return { headers: [], rows: [] };
+
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < data.length; i++) {
+    const values = data[i] as unknown[];
+    const row: Record<string, string> = {};
+    headers.forEach((header, idx) => {
+      row[header] = String(values[idx] ?? '').trim();
+    });
+    // Skip entirely blank rows
+    if (Object.values(row).some((v) => v !== '')) {
+      rows.push(row);
+    }
+  }
+
+  return { headers, rows };
+}
 
 function buildMappedRow(
   raw: Record<string, string>,
@@ -120,8 +163,10 @@ function downloadTemplate() {
 
 function UploadStep({
   onParsed,
+  onFileName,
 }: {
   onParsed: (headers: string[], rows: Record<string, string>[]) => void;
+  onFileName: (name: string) => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState('');
@@ -130,27 +175,54 @@ function UploadStep({
   const handleFile = useCallback(
     (file: File) => {
       setError('');
-      if (!file.name.match(/\.(csv|txt)$/i)) {
-        setError('Please upload a .csv file.');
+
+      if (!ACCEPTED_EXTENSIONS.test(file.name)) {
+        setError('Please upload a .csv, .xlsx, or .xls file.');
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string;
-        const { headers, rows } = parseCsv(text);
-        if (headers.length === 0) {
-          setError('The file appears to be empty or has no columns.');
-          return;
-        }
-        if (rows.length === 0) {
-          setError('The file has headers but no data rows.');
-          return;
-        }
-        onParsed(headers, rows);
-      };
-      reader.readAsText(file);
+
+      onFileName(file.name);
+
+      const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+
+      if (isExcel) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const { headers, rows } = parseXlsx(e.target?.result as ArrayBuffer);
+            if (headers.length === 0) {
+              setError('The spreadsheet appears to be empty or has no columns.');
+              return;
+            }
+            if (rows.length === 0) {
+              setError('The spreadsheet has headers but no data rows.');
+              return;
+            }
+            onParsed(headers, rows);
+          } catch {
+            setError('Could not read the Excel file. Make sure it is a valid .xlsx or .xls workbook.');
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const text = e.target?.result as string;
+          const { headers, rows } = parseCsv(text);
+          if (headers.length === 0) {
+            setError('The file appears to be empty or has no columns.');
+            return;
+          }
+          if (rows.length === 0) {
+            setError('The file has headers but no data rows.');
+            return;
+          }
+          onParsed(headers, rows);
+        };
+        reader.readAsText(file);
+      }
     },
-    [onParsed],
+    [onParsed, onFileName],
   );
 
   const handleDrop = (e: React.DragEvent) => {
@@ -181,20 +253,22 @@ function UploadStep({
         </div>
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">
-            Drop a CSV file here, or click to browse
+            Drop a file here, or click to browse
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Supports .csv files exported from Excel, Google Sheets, or any spreadsheet app
+            Supports Excel (.xlsx, .xls) and CSV (.csv, .txt) — first sheet is imported
           </p>
         </div>
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,.txt"
+          accept=".csv,.txt,.xlsx,.xls"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) handleFile(file);
+            // Reset so the same file can be re-selected after an error
+            e.target.value = '';
           }}
         />
       </div>
@@ -212,14 +286,14 @@ function UploadStep({
         <p>Column names don't need to match exactly — you'll confirm the mapping in the next step.</p>
         <div className="pt-0.5">
           <button
-            onClick={downloadTemplate}
+            onClick={(e) => { e.stopPropagation(); downloadTemplate(); }}
             className="inline-flex items-center gap-1.5 text-primary hover:underline font-medium"
           >
             <Download className="w-3 h-3" />
             Download blank CSV template
           </button>
           <span className="ml-1 text-muted-foreground">
-            — fill it in and upload it here; columns will auto-map perfectly.
+            — fill it in (or open in Excel and save as .xlsx) and upload it here.
           </span>
         </div>
       </div>
@@ -542,7 +616,8 @@ export function CsvImport({ open, onOpenChange, existingLocations, onImport }: C
       .filter((r) => !r.skip && r.mapped !== null)
       .map((r) => r.mapped!);
 
-    onImport(toImport, 'CSV import');
+    const source = /\.(xlsx|xls)$/i.test(fileName) ? 'Excel import' : 'CSV import';
+    onImport(toImport, source);
     onOpenChange(false);
     reset();
   };
@@ -564,7 +639,7 @@ export function CsvImport({ open, onOpenChange, existingLocations, onImport }: C
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            Import Locations from CSV
+            Import Locations from Spreadsheet
           </DialogTitle>
           <DialogDescription>{stepLabel[step]}</DialogDescription>
         </DialogHeader>
@@ -574,9 +649,8 @@ export function CsvImport({ open, onOpenChange, existingLocations, onImport }: C
         <div className="pt-1">
           {step === 'upload' && (
             <UploadStep
-              onParsed={(headers, rows) => {
-                handleParsed(headers, rows);
-              }}
+              onParsed={handleParsed}
+              onFileName={setFileName}
             />
           )}
 
