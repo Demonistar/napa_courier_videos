@@ -126,6 +126,18 @@ const api = {
       folders?: Array<{ name: string; pathDisplay: string; pathLower: string }>;
       error?: string;
     }> => ipcRenderer.invoke('dropbox:findNapaAdminFolders'),
+
+    /**
+     * Test whether a folder path is accessible in Dropbox and whether the
+     * "NAPA Admin Data" subfolder already exists inside it.
+     * Returns ok:true with a human-readable message on success, or
+     * ok:false with the Dropbox error message on failure.
+     */
+    testFolderPath: (path: string): Promise<{
+      ok: boolean;
+      message?: string;
+      error?: string;
+    }> => ipcRenderer.invoke('dropbox:testFolderPath', path),
   },
 };
 

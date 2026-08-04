@@ -71,11 +71,18 @@ export function DropboxFolderBrowser({
   const [entries, setEntries] = useState<FolderEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null);
 
   // Start at the currently-configured path when the dialog opens.
   useEffect(() => {
     if (open) setCurrentPath(initialPath || '');
   }, [open, initialPath]);
+
+  // Reset test result whenever the admin navigates to a new path.
+  useEffect(() => {
+    setTestResult(null);
+  }, [currentPath]);
 
   // Reload folder listing whenever currentPath changes (while open).
   useEffect(() => {
@@ -100,6 +107,19 @@ export function DropboxFolderBrowser({
       })
       .finally(() => setLoading(false));
   }, [open, currentPath]);
+
+  const testCurrentPath = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await window.electronAPI.dropbox.testFolderPath(currentPath);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, error: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const breadcrumbs = toBreadcrumbs(currentPath);
   const hasDetected = detectedFolders.length > 0;
@@ -237,23 +257,50 @@ export function DropboxFolderBrowser({
         </div>
 
         {/* ── Footer — shows selected path + action buttons ───────────── */}
-        <div className="flex items-center justify-between gap-3 px-5 py-4 border-t bg-muted/30 shrink-0">
-          <div className="flex-1 min-w-0">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
-              Selected folder
-            </p>
-            <code className="text-xs font-mono text-foreground block truncate">
-              {currentPath || '/ (Dropbox root)'}
-            </code>
+        <div className="flex flex-col gap-2 px-5 py-4 border-t bg-muted/30 shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                Selected folder
+              </p>
+              <code className="text-xs font-mono text-foreground block truncate">
+                {currentPath || '/ (Dropbox root)'}
+              </code>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void testCurrentPath()}
+                disabled={testing}
+                className="gap-1"
+                title="Check whether this path exists in your Dropbox"
+              >
+                {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                Test
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => onSelect(currentPath)}>
+                Select This Folder
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2 shrink-0">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={() => onSelect(currentPath)}>
-              Select This Folder
-            </Button>
-          </div>
+
+          {/* Test result */}
+          {testResult !== null && (
+            <div
+              className={[
+                'flex items-start gap-2 px-2.5 py-2 rounded-md text-xs',
+                testResult.ok
+                  ? 'border border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900 text-green-800 dark:text-green-300'
+                  : 'border border-destructive/30 bg-destructive/5 text-destructive',
+              ].join(' ')}
+            >
+              <span>{testResult.ok ? testResult.message : testResult.error}</span>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

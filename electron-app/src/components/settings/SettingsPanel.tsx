@@ -88,6 +88,8 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
+  const [folderTesting, setFolderTesting] = useState(false);
+  const [folderTestResult, setFolderTestResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null);
   const [localUser, setLocalUser] = useState(currentUser);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>('light');
@@ -139,6 +141,25 @@ export function SettingsPanel({
       .catch(() => setDetectedFolders([]))
       .finally(() => setDetecting(false));
   }, [open, dropboxUser.connected]);
+
+  // Reset test result whenever the admin edits the path manually.
+  const handleFolderPathChange = (value: string) => {
+    setFolderPath(value);
+    setFolderTestResult(null);
+  };
+
+  const testFolderPath = async () => {
+    setFolderTesting(true);
+    setFolderTestResult(null);
+    try {
+      const result = await window.electronAPI.dropbox.testFolderPath(folderPath);
+      setFolderTestResult(result);
+    } catch (err) {
+      setFolderTestResult({ ok: false, error: String(err) });
+    } finally {
+      setFolderTesting(false);
+    }
+  };
 
   const commitFolderPath = async () => {
     await window.electronAPI.settings.set({ dropboxFolderPath: folderPath });
@@ -372,15 +393,32 @@ export function SettingsPanel({
                 </div>
               )}
 
-              {/* Path input + Save + Browse */}
+              {/* Path input + buttons */}
               <div className="flex gap-2">
                 <Input
                   id="folder-path"
                   value={folderPath}
-                  onChange={(e) => setFolderPath(e.target.value)}
+                  onChange={(e) => handleFolderPathChange(e.target.value)}
                   placeholder="/NAPA Courier Admin"
                   className="font-mono text-sm"
                 />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void testFolderPath()}
+                  disabled={!dropboxUser.connected || folderTesting}
+                  className="shrink-0 gap-1"
+                  title={
+                    dropboxUser.connected
+                      ? 'Check whether this path exists in your Dropbox'
+                      : 'Connect to Dropbox first'
+                  }
+                >
+                  {folderTesting
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : null}
+                  Test
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -405,6 +443,24 @@ export function SettingsPanel({
                   Browse
                 </Button>
               </div>
+
+              {/* Test result */}
+              {folderTestResult !== null && (
+                <div
+                  className={[
+                    'flex items-start gap-2 p-2.5 rounded-md text-xs',
+                    folderTestResult.ok
+                      ? 'border border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900 text-green-800 dark:text-green-300'
+                      : 'border border-destructive/30 bg-destructive/5 text-destructive',
+                  ].join(' ')}
+                >
+                  {folderTestResult.ok
+                    ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
+                  <span>{folderTestResult.ok ? folderTestResult.message : folderTestResult.error}</span>
+                </div>
+              )}
+
               <p className="text-xs text-muted-foreground">
                 The app stores files inside a{' '}
                 <code className="font-mono text-xs">NAPA Admin Data/</code> subfolder at

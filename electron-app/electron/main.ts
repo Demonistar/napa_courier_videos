@@ -769,6 +769,59 @@ function registerIpcHandlers() {
       return { ok: false, error: (err as Error).message, folders: [] };
     }
   });
+
+  /**
+   * Test whether a given folder path is accessible in Dropbox and whether the
+   * "NAPA Admin Data" subfolder already exists inside it.
+   *
+   * - Returns { ok: true, message: '✓ Found existing data folder' } when the
+   *   NAPA Admin Data subfolder already exists at the path.
+   * - Returns { ok: true, message: '✓ Path is accessible (no data yet)' } when
+   *   the parent folder exists but no data subfolder has been created yet.
+   * - Returns { ok: false, error: '…' } with the Dropbox error message when the
+   *   folder is not found or any other API error occurs.
+   */
+  ipcMain.handle('dropbox:testFolderPath', async (_event, testPath: string) => {
+    try {
+      const normalized = (testPath ?? '').replace(/\/$/, '');
+      const napaDataPath = normalized
+        ? `${normalized}/NAPA Admin Data`
+        : '/NAPA Admin Data';
+
+      // First: does the NAPA Admin Data subfolder already exist?
+      const napaResp = await dbxApi('/files/get_metadata', { path: napaDataPath });
+
+      if (napaResp.ok) {
+        return { ok: true, message: '✓ Found existing data folder' };
+      }
+
+      if (napaResp.status === 409) {
+        // Subfolder not found — check whether the parent path itself is reachable.
+        // The Dropbox root ('') is always reachable so skip the extra call.
+        if (!normalized) {
+          return { ok: true, message: '✓ Path is accessible (no data yet)' };
+        }
+
+        const parentResp = await dbxApi('/files/get_metadata', { path: normalized });
+
+        if (parentResp.ok) {
+          return { ok: true, message: '✓ Path is accessible (no data yet)' };
+        }
+
+        if (parentResp.status === 409) {
+          return { ok: false, error: `Folder not found in your Dropbox: ${normalized}` };
+        }
+
+        const errText = await parentResp.text().catch(() => String(parentResp.status));
+        return { ok: false, error: `Dropbox error ${parentResp.status}: ${errText}` };
+      }
+
+      const errText = await napaResp.text().catch(() => String(napaResp.status));
+      return { ok: false, error: `Dropbox error ${napaResp.status}: ${errText}` };
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
