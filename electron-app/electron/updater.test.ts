@@ -1147,3 +1147,185 @@ describe('initAutoUpdater — checksum-error guard: recovery paths clear the qua
     expect(getUpdateDownloaded()).toBe(true);
   });
 });
+
+// ─── isRunningFromAppImage ─────────────────────────────────────────────────────
+//
+// This function gates the entire auto-update flow on Linux.  It must return
+// true only when the process is running on Linux AND the AppImage runtime has
+// set the APPIMAGE environment variable to the resolved path of the .AppImage
+// file.
+
+describe('isRunningFromAppImage', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    // Restore platform descriptor if a test replaced it.
+    Object.defineProperty(process, 'platform', { value: originalPlatform, writable: true });
+  });
+
+  it('returns true on Linux when APPIMAGE is set', () => {
+    // Global beforeEach already sets APPIMAGE = '/fake/test.AppImage'
+    expect(process.platform).toBe('linux');
+    expect(process.env.APPIMAGE).toBeTruthy();
+    expect(isRunningFromAppImage()).toBe(true);
+  });
+
+  it('returns false on Linux when APPIMAGE is not set', () => {
+    const saved = process.env.APPIMAGE;
+    delete process.env.APPIMAGE;
+    try {
+      expect(isRunningFromAppImage()).toBe(false);
+    } finally {
+      if (saved !== undefined) process.env.APPIMAGE = saved;
+    }
+  });
+
+  it('returns false on macOS even when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', writable: true });
+    // APPIMAGE is set by the global beforeEach
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+
+  it('returns false on Windows even when APPIMAGE is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', writable: true });
+    expect(isRunningFromAppImage()).toBe(false);
+  });
+
+  it('returns false when APPIMAGE is an empty string', () => {
+    const saved = process.env.APPIMAGE;
+    process.env.APPIMAGE = '';
+    try {
+      expect(isRunningFromAppImage()).toBe(false);
+    } finally {
+      if (saved !== undefined) process.env.APPIMAGE = saved;
+      else delete process.env.APPIMAGE;
+    }
+  });
+});
+
+// ─── initAutoUpdater — Linux AppImage guard ────────────────────────────────────
+//
+// On Linux, initAutoUpdater must:
+//   • skip checkForUpdates entirely (and log a warning) when APPIMAGE is absent
+//   • proceed normally and call checkForUpdates when APPIMAGE is present
+//
+// The global beforeEach sets APPIMAGE so other suites are unaffected; this
+// suite manipulates the variable inside its own beforeEach / afterEach.
+
+describe('initAutoUpdater — Linux AppImage guard (APPIMAGE not set → skip)', () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => { /* suppress */ });
+    // Remove APPIMAGE so the guard fires
+    delete process.env.APPIMAGE;
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+    // Restore the sentinel so the global afterEach can clean up normally
+    process.env.APPIMAGE = '/fake/test.AppImage';
+  });
+
+  it('does NOT call checkForUpdates when APPIMAGE is absent', () => {
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('logs a console warning explaining why auto-updates are skipped', () => {
+    initAutoUpdater(mockWin);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('not running from AppImage'),
+    );
+  });
+
+  it('registers no event listeners when APPIMAGE is absent', () => {
+    initAutoUpdater(mockWin);
+    expect(mockAutoUpdater.listenerCount('update-available')).toBe(0);
+    expect(mockAutoUpdater.listenerCount('update-downloaded')).toBe(0);
+    expect(mockAutoUpdater.listenerCount('error')).toBe(0);
+  });
+});
+
+describe('initAutoUpdater — Linux AppImage guard (APPIMAGE set → proceeds)', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    // Global beforeEach already sets APPIMAGE; be explicit for clarity
+    process.env.APPIMAGE = '/home/user/NapaCourierAdmin.AppImage';
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+    // Restore sentinel for global afterEach
+    process.env.APPIMAGE = '/fake/test.AppImage';
+  });
+
+  it('calls checkForUpdates when APPIMAGE is set', () => {
+    expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it('registers the update-available listener when APPIMAGE is set', () => {
+    expect(mockAutoUpdater.listenerCount('update-available')).toBeGreaterThan(0);
+  });
+
+  it('registers the error listener when APPIMAGE is set', () => {
+    expect(mockAutoUpdater.listenerCount('error')).toBeGreaterThan(0);
+  });
+});
+
+// ─── checkForUpdatesManually — Linux AppImage guard ───────────────────────────
+//
+// When the admin triggers a manual check on Linux and APPIMAGE is absent, the
+// function must show an informational dialog and return without calling
+// checkForUpdates, so the admin understands why updates are unavailable.
+
+describe('checkForUpdatesManually — Linux AppImage guard (APPIMAGE not set)', () => {
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    // Remove APPIMAGE before calling initAutoUpdater — the guard must fire
+    delete process.env.APPIMAGE;
+    // initAutoUpdater will return early (no listeners), but checkForUpdatesManually
+    // has its own guard which we are testing independently here.
+  });
+
+  afterEach(() => {
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+    process.env.APPIMAGE = '/fake/test.AppImage';
+  });
+
+  it('shows an informational dialog when APPIMAGE is not set', () => {
+    checkForUpdatesManually(mockWin);
+
+    expect(mockDialog.showMessageBox).toHaveBeenCalledOnce();
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.type).toBe('info');
+    expect(opts.title).toBe('Updates unavailable');
+  });
+
+  it('dialog message explains the AppImage requirement to the admin', () => {
+    checkForUpdatesManually(mockWin);
+
+    const [, opts] = mockDialog.showMessageBox.mock.calls[0] as [unknown, Electron.MessageBoxOptions];
+    expect(opts.message).toContain('AppImage');
+  });
+
+  it('does NOT call checkForUpdates when APPIMAGE is absent', () => {
+    checkForUpdatesManually(mockWin);
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+});
