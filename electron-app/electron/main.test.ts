@@ -243,6 +243,10 @@ describe('IPC channel registration coverage', () => {
     'dropbox:listFolder',
     'dropbox:findNapaAdminFolders',
     'dropbox:testFolderPath',
+    // Dropbox image and link helpers
+    'dropbox:uploadImage',
+    'dropbox:downloadImage',
+    'dropbox:generateLinks',
   ] as const;
 
   it('registers every IPC channel declared in preload.ts', () => {

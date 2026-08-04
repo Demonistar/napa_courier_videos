@@ -179,6 +179,23 @@ describe('AdminDashboard — update badge lifecycle', () => {
     expect(screen.getByLabelText('Update available')).toBeInTheDocument();
   });
 
+  it('hides the badge when the onUpdateCancelled push event fires mid-session', async () => {
+    // Start with a completed download so the badge is visible.
+    const api = makeElectronAPI(true);
+    setElectronAPI(api);
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Update available')).toBeInTheDocument();
+    });
+
+    // Main process signals that the download was cancelled / errored.
+    act(() => { api._fireUpdateCancelled(); });
+
+    expect(screen.queryByLabelText('Update available')).not.toBeInTheDocument();
+  });
+
   it('badge is absent after a simulated restart (remount with updateDownloaded: false)', async () => {
     // First launch: update was already downloaded, badge should appear.
     const apiBeforeRestart = makeElectronAPI(true);

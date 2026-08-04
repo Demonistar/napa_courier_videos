@@ -34,6 +34,7 @@ interface TopBarProps {
   onOpenImport: () => void;
   onOpenGenerateLinks: () => void;
   dropboxUser: DropboxUserInfo;
+  updateReady?: boolean;
 }
 
 export function TopBar({
@@ -53,6 +54,7 @@ export function TopBar({
   onOpenImport,
   onOpenGenerateLinks,
   dropboxUser,
+  updateReady = false,
 }: TopBarProps) {
   return (
     <div className="h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0">
@@ -171,11 +173,20 @@ export function TopBar({
               size="icon"
               onClick={onOpenSettings}
               data-testid="button-settings"
+              className="relative"
             >
               <Settings className="w-5 h-5" />
+              {updateReady && (
+                <span
+                  aria-label="Update available"
+                  className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 ring-1 ring-background pointer-events-none"
+                />
+              )}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Settings &amp; Dropbox</TooltipContent>
+          <TooltipContent>
+            {updateReady ? 'Update ready — open Settings to install' : 'Settings & Dropbox'}
+          </TooltipContent>
         </Tooltip>
 
         {/* Help */}
