@@ -85,6 +85,25 @@ describe('SettingsPanel — Restart to Install button', () => {
     expect(quitAndInstall).toHaveBeenCalledTimes(1);
   });
 
+  it('calls onOpenChange(false) before quitAndInstall when Restart is clicked', () => {
+    const callOrder: string[] = [];
+    const quitAndInstall = vi.fn(() => { callOrder.push('quitAndInstall'); });
+    stubElectronAPI(quitAndInstall);
+
+    const onOpenChange = vi.fn((_open: boolean) => { callOrder.push('onOpenChange'); });
+
+    render(<SettingsPanel {...defaultProps({ updateReady: true, onOpenChange })} />);
+
+    const restartButton = screen.getByRole('button', { name: /restart/i });
+    fireEvent.click(restartButton);
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+    // onOpenChange must fire before quitAndInstall so the dialog dismisses
+    // before the app begins shutting down.
+    expect(callOrder).toEqual(['onOpenChange', 'quitAndInstall']);
+  });
+
   it('renders the Restart button when updateReady is true', () => {
     stubElectronAPI();
 

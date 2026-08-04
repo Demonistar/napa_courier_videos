@@ -549,7 +549,7 @@ export function SettingsPanel({
               <Button
                 size="sm"
                 className="gap-1.5 bg-green-600 hover:bg-green-700 text-white shrink-0"
-                onClick={() => window.electronAPI.app.quitAndInstall()}
+                onClick={() => { onOpenChange(false); window.electronAPI.app.quitAndInstall(); }}
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Restart
