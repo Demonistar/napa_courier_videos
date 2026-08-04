@@ -104,6 +104,9 @@ export function SettingsPanel({
   const [uninstallError, setUninstallError] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState(false);
 
+  // Mismatch-confirmation state
+  const [mismatchConfirmOpen, setMismatchConfirmOpen] = useState(false);
+
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
   // Load settings, app version, and platform when panel opens.
@@ -137,10 +140,26 @@ export function SettingsPanel({
       .finally(() => setDetecting(false));
   }, [open, dropboxUser.connected]);
 
-  const saveFolderPath = async () => {
+  const commitFolderPath = async () => {
     await window.electronAPI.settings.set({ dropboxFolderPath: folderPath });
     setFolderSaved(true);
     setTimeout(() => setFolderSaved(false), 3000);
+  };
+
+  const saveFolderPath = () => {
+    // If at least one detected folder exists and the typed path doesn't match
+    // any of their parents, require an explicit confirmation before saving.
+    if (detectedFolders.length > 0) {
+      const typedNorm = folderPath.trim().toLowerCase().replace(/\/+$/, '');
+      const matchesDetected = detectedFolders.some(
+        (f) => parentOf(f.pathLower).replace(/\/+$/, '') === typedNorm,
+      );
+      if (!matchesDetected) {
+        setMismatchConfirmOpen(true);
+        return;
+      }
+    }
+    void commitFolderPath();
   };
 
   /** Apply a detected "NAPA Admin Data" folder's parent path as the setting. */
@@ -513,6 +532,45 @@ export function SettingsPanel({
           setTimeout(() => setFolderSaved(false), 3000);
         }}
       />
+
+      {/* ── Mismatch confirmation dialog ─────────────────────────────────── */}
+      <AlertDialog open={mismatchConfirmOpen} onOpenChange={setMismatchConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Use a different folder?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                <p>
+                  The path you typed differs from the shared data folder
+                  {detectedFolders.length === 1 && (
+                    <>
+                      {' '}detected at{' '}
+                      <code className="font-mono text-xs bg-muted px-1 rounded break-all">
+                        {parentOf(detectedFolders[0].pathDisplay) || '/ (Dropbox root)'}
+                      </code>
+                    </>
+                  )}
+                  {detectedFolders.length > 1 && ' already found in your Dropbox'}.
+                </p>
+                <p>
+                  Saving a different path will create a{' '}
+                  <strong>separate, disconnected data folder</strong> that other admins
+                  won't see. Continue only if you're certain this is the right location.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void commitFolderPath()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Save anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Uninstall confirmation dialog ────────────────────────────────── */}
       <AlertDialog open={uninstallOpen} onOpenChange={setUninstallOpen}>
