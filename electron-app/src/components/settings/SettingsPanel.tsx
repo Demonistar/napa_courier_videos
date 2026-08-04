@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Cloud, CloudOff, FolderOpen, LogOut, RefreshCw } from 'lucide-react';
+import { Cloud, CloudOff, FolderOpen, LogOut, Moon, Monitor, RefreshCw, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,6 +23,21 @@ interface SettingsPanelProps {
   updateReady?: boolean;
 }
 
+type Theme = 'light' | 'dark' | 'system';
+
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.classList.add('dark');
+  } else if (theme === 'light') {
+    root.classList.remove('dark');
+  } else {
+    // 'system' — follow OS preference
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('dark', prefersDark);
+  }
+}
+
 export function SettingsPanel({
   open,
   onOpenChange,
@@ -36,6 +51,7 @@ export function SettingsPanel({
   const [folderSaved, setFolderSaved] = useState(false);
   const [localUser, setLocalUser] = useState(currentUser);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [theme, setTheme] = useState<Theme>('light');
 
   useEffect(() => { setLocalUser(currentUser); }, [currentUser]);
 
@@ -45,6 +61,7 @@ export function SettingsPanel({
     window.electronAPI.settings.get().then((s) => {
       setFolderPath(s.dropboxFolderPath ?? '');
       if (s.displayNameOverride) setLocalUser(s.displayNameOverride);
+      setTheme(s.theme ?? 'light');
     });
     window.electronAPI.app.getVersion().then(setAppVersion);
   }, [open]);
@@ -59,6 +76,12 @@ export function SettingsPanel({
     const name = localUser.trim() || 'Unknown user';
     onCurrentUserChange(name);
     await window.electronAPI.settings.set({ displayNameOverride: name });
+  };
+
+  const changeTheme = async (next: Theme) => {
+    setTheme(next);
+    applyTheme(next);
+    await window.electronAPI.settings.set({ theme: next });
   };
 
   return (
@@ -110,6 +133,37 @@ export function SettingsPanel({
             )}
           </section>
 
+          {/* ── Appearance ──────────────────────────────────────────── */}
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Appearance</h3>
+            <p className="text-xs text-muted-foreground">
+              Choose how the app looks. <em>System</em> follows your OS preference.
+            </p>
+            <div className="flex gap-1 p-1 rounded-md bg-muted w-fit">
+              {(
+                [
+                  { value: 'light',  label: 'Light',  Icon: Sun     },
+                  { value: 'system', label: 'System', Icon: Monitor },
+                  { value: 'dark',   label: 'Dark',   Icon: Moon    },
+                ] as const
+              ).map(({ value, label, Icon }) => (
+                <button
+                  key={value}
+                  onClick={() => changeTheme(value)}
+                  className={[
+                    'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors',
+                    theme === value
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  ].join(' ')}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </section>
+
           {/* ── Dropbox Data Folder ─────────────────────────────────── */}
           <section className="space-y-2">
             <Label htmlFor="folder-path" className="text-sm font-semibold flex items-center gap-2">
@@ -134,9 +188,8 @@ export function SettingsPanel({
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              The app creates <code className="font-mono text-xs">locations-staging.json</code>,{' '}
-              <code className="font-mono text-xs">locations-live.json</code>, and a{' '}
-              <code className="font-mono text-xs">backups/</code> subfolder inside this path.
+              The app stores files inside a{' '}
+              <code className="font-mono text-xs">NAPA Admin Data/</code> subfolder at this path.
               Changes take effect on next reload.
             </p>
           </section>

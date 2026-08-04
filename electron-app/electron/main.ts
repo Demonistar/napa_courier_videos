@@ -51,6 +51,7 @@ interface StoredToken {
 interface AppSettings {
   dropboxFolderPath: string;
   displayNameOverride?: string;
+  theme?: 'light' | 'dark' | 'system';
 }
 
 interface DropboxUser {
@@ -606,6 +607,11 @@ function registerIpcHandlers() {
 
   ipcMain.handle('settings:set', (_event, updates: Partial<AppSettings>) => {
     saveSettings(updates);
+    // Apply theme change immediately so the native OS window title bar / menus
+    // update without requiring a restart.
+    if (updates.theme) {
+      nativeTheme.themeSource = updates.theme;
+    }
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
@@ -772,7 +778,7 @@ function createMainWindow(): BrowserWindow {
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  nativeTheme.themeSource = 'light';
+  nativeTheme.themeSource = loadSettings().theme ?? 'light';
   registerIpcHandlers();
   const win = createMainWindow();
   buildAppMenu(win);       // needs win for the Help → Check for Updates handler

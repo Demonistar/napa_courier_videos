@@ -7,9 +7,25 @@ import type { AuthStatus } from '../electron/preload';
 
 type AppPhase = 'checking' | 'login' | 'app';
 
+// Apply saved theme to <html> before first render to avoid flash.
+// Also handles 'system' by reading the OS media query.
+function applyThemeClass(theme: 'light' | 'dark' | 'system' = 'light') {
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.classList.toggle(
+    'dark',
+    theme === 'dark' || (theme === 'system' && prefersDark),
+  );
+}
+
 export default function App() {
   const [phase, setPhase] = useState<AppPhase>('checking');
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+
+  // Load and apply the saved theme on first mount so the correct
+  // colour scheme is in place before any content renders.
+  useEffect(() => {
+    window.electronAPI.settings.get().then((s) => applyThemeClass(s.theme));
+  }, []);
 
   const checkAuth = async () => {
     try {

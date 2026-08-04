@@ -19,6 +19,7 @@ export interface AuthStatus {
 export interface AppSettings {
   dropboxFolderPath: string;
   displayNameOverride?: string;
+  theme?: 'light' | 'dark' | 'system';
 }
 
 export interface BackupMeta {
