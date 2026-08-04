@@ -36,11 +36,39 @@ export let _updateDownloaded = false;
 export let _manualCheckPending = false;
 export let _checkForUpdatesMenuItem: MenuItem | null = null;
 
+/**
+ * The version string of the update that electron-updater is currently
+ * downloading (set from the update-available event).  This is the *target*
+ * update version (e.g. "2.0.0"), NOT the installed/current app version.
+ * Used by the checksum-failure guard to identify which download to quarantine.
+ */
+export let _pendingUpdateVersion: string | null = null;
+
+/**
+ * When non-null, the update-downloaded handler will reject any incoming
+ * download whose version matches this string.
+ *
+ * Set to _pendingUpdateVersion when a checksum / integrity error fires so that
+ * an automatic electron-updater retry of the same corrupt file cannot set
+ * _updateDownloaded = true.  Only checksum / integrity / signature failures
+ * arm this guard — network errors leave it null because a clean retry after
+ * ECONNRESET is safe to accept.
+ *
+ * Cleared by:
+ *   • update-available  — a new check generation started; incoming download is
+ *                         for a (potentially different) fresh attempt
+ *   • checkForUpdatesManually — the admin deliberately triggered a new check
+ *   • resetUpdaterStateForTesting — test isolation
+ */
+export let _checksumFailedVersion: string | null = null;
+
 /** Reset all mutable state. Only for use in tests. */
 export function resetUpdaterStateForTesting(): void {
   _updateDownloaded = false;
   _manualCheckPending = false;
   _checkForUpdatesMenuItem = null;
+  _pendingUpdateVersion = null;
+  _checksumFailedVersion = null;
 }
 /**
  * Returns true when the error looks like a checksum / hash / signature failure
@@ -178,6 +206,11 @@ export function checkForUpdatesManually(win: BrowserWindow): void {
   // Prevent double-clicks from firing two simultaneous checks.
   if (_manualCheckPending) return;
   _manualCheckPending = true;
+  // A deliberate fresh check starts a new download generation — clear both
+  // the pending-version tracking and any quarantine so that a newly published
+  // (or re-signed) release can install normally.
+  _pendingUpdateVersion = null;
+  _checksumFailedVersion = null;
   if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = false;
   autoUpdater.checkForUpdates().catch((err) => {
     // The 'error' event fires before the promise rejects in electron-updater 6.x,
@@ -207,6 +240,16 @@ export function initAutoUpdater(win: BrowserWindow): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // A new update version was found — capture the target version so the
+  // checksum-failure guard knows which version to quarantine if the download
+  // later fails.  Also clear any prior quarantine so the fresh download is
+  // judged on its own merits.
+  autoUpdater.on('update-available', (info: { version: string }) => {
+    _pendingUpdateVersion = info?.version ?? null;
+    _checksumFailedVersion = null;
+    console.log(`[auto-updater] update available: ${_pendingUpdateVersion ?? 'unknown'}`);
+  });
+
   // Fired after a manual check when already on the latest version.
   autoUpdater.on('update-not-available', () => {
     if (_manualCheckPending) {
@@ -227,7 +270,25 @@ export function initAutoUpdater(win: BrowserWindow): void {
     win.webContents.send('app:downloadProgress', info);
   });
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info: { version: string }) => {
+    const incomingVersion = info?.version ?? null;
+    if (_checksumFailedVersion !== null && _checksumFailedVersion === incomingVersion) {
+      // This download is for the same version that previously failed a checksum
+      // check — electron-updater retried automatically but we cannot trust the
+      // result.  Reject it: leave _updateDownloaded false, dismiss the badge,
+      // and let the admin trigger a deliberate fresh check to try again.
+      // Recovery: calling checkForUpdatesManually() clears _checksumFailedVersion
+      // so a subsequent clean download for any version installs normally.
+      console.warn(
+        `[auto-updater] update-downloaded for v${incomingVersion} rejected — ` +
+        'this version previously failed a checksum check. ' +
+        'Use "Check for Updates…" to start a fresh attempt.',
+      );
+      _manualCheckPending = false;
+      if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
+      win.webContents.send('app:updateCancelled');
+      return;
+    }
     _updateDownloaded = true;
     _manualCheckPending = false;
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
@@ -246,6 +307,24 @@ export function initAutoUpdater(win: BrowserWindow): void {
     // on the next restart — electron-updater may have set it to true before the
     // error fired (e.g. checksum mismatch detected after the write completed).
     _updateDownloaded = false;
+    // If this is a checksum / integrity failure, quarantine the target update
+    // version (_pendingUpdateVersion, captured from the preceding
+    // update-available event).  The update-downloaded handler compares the
+    // incoming version against _checksumFailedVersion and rejects the event
+    // when they match, preventing the corrupt file from being installed.
+    //
+    // _pendingUpdateVersion is the *target* (update) version — distinct from
+    // autoUpdater.currentVersion which is the installed app version.
+    //
+    // Network errors are NOT quarantined: a clean retry after ECONNRESET is
+    // safe to accept and must not be blocked.
+    if (isChecksumError(err as Error)) {
+      _checksumFailedVersion = _pendingUpdateVersion;
+      console.warn(
+        `[auto-updater] checksum failure for v${_checksumFailedVersion ?? 'unknown'} — ` +
+        'quarantined; automatic retries of this version will be rejected.',
+      );
+    }
     if (_checkForUpdatesMenuItem) _checkForUpdatesMenuItem.enabled = true;
     console.error('[auto-updater] error:', err?.message ?? err);
     // Tell the renderer to dismiss the in-app update badge.

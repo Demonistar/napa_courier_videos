@@ -72,6 +72,8 @@ import {
   setCheckForUpdatesMenuItem,
   resetUpdaterStateForTesting,
   getUpdateDownloaded,
+  _pendingUpdateVersion,
+  _checksumFailedVersion,
 } from './updater';
 
 // ─── Shared test window stub ──────────────────────────────────────────────────
@@ -798,5 +800,350 @@ describe('isWriteError', () => {
 
   it('returns false when there is no error code at all', () => {
     expect(isWriteError(makeError('something went wrong'))).toBe(false);
+  });
+});
+
+// ─── Version-scoped checksum-error retry guard ────────────────────────────────
+//
+// After a checksum / integrity error, electron-updater may automatically retry
+// the download and fire update-downloaded again.  The guard scopes the block to
+// the specific *target* (update) version captured from the update-available
+// event — NOT autoUpdater.currentVersion, which is the installed app version.
+//
+// Real-world flow:
+//   update-available { version:'2.0.0' }  → _pendingUpdateVersion = '2.0.0'
+//   error (checksum)                       → _checksumFailedVersion = '2.0.0'
+//   update-downloaded { version:'2.0.0' } → REJECTED (same as quarantined)
+//
+// INSTALLED_VERSION = the currently-installed app version ('1.2.3')
+// TARGET_VERSION    = the target update version ('2.0.0'), captured via event
+// CLEAN_VERSION     = a later release ('3.0.0') that should never be blocked
+
+const INSTALLED_VERSION = '1.2.3'; // mockApp.getVersion() — the running app
+const TARGET_VERSION = '2.0.0';    // offered update, captured from update-available
+const CLEAN_VERSION = '3.0.0';     // a subsequent clean release
+
+describe('initAutoUpdater — checksum-error guard: _pendingUpdateVersion tracking', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* suppress */ });
+    initAutoUpdater(mockWin);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('captures the target update version from update-available (not the installed version)', () => {
+    // Installed version is INSTALLED_VERSION (1.2.3), target is TARGET_VERSION (2.0.0)
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+    expect(_pendingUpdateVersion).toBe(TARGET_VERSION);
+    expect(_pendingUpdateVersion).not.toBe(INSTALLED_VERSION);
+  });
+
+  it('is null before update-available fires', () => {
+    expect(_pendingUpdateVersion).toBeNull();
+  });
+
+  it('resets _pendingUpdateVersion when resetUpdaterStateForTesting is called', () => {
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+    resetUpdaterStateForTesting();
+    expect(_pendingUpdateVersion).toBeNull();
+  });
+});
+
+describe('initAutoUpdater — checksum-error guard: quarantine is set from _pendingUpdateVersion', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* suppress */ });
+    initAutoUpdater(mockWin);
+    // Simulate the real flow: update-available fires first so _pendingUpdateVersion
+    // tracks the target version (2.0.0), not the installed version (1.2.3).
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('sets _checksumFailedVersion to the target update version (from update-available)', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    // Must be the TARGET (update) version, not the installed app version
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+    expect(_checksumFailedVersion).not.toBe(INSTALLED_VERSION);
+  });
+
+  it('sets _checksumFailedVersion for a sha512 integrity error', () => {
+    mockAutoUpdater.emit('error', makeError('sha512 hash does not match'));
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+  });
+
+  it('does NOT set _checksumFailedVersion for a network error', () => {
+    mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com'));
+    expect(_checksumFailedVersion).toBeNull();
+  });
+
+  it('does NOT set _checksumFailedVersion for a write/disk error', () => {
+    mockAutoUpdater.emit('error', makeError('ENOSPC: no space left on device', 'ENOSPC'));
+    expect(_checksumFailedVersion).toBeNull();
+  });
+
+  it('resets _checksumFailedVersion when resetUpdaterStateForTesting is called', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+    resetUpdaterStateForTesting();
+    expect(_checksumFailedVersion).toBeNull();
+  });
+});
+
+describe('initAutoUpdater — checksum-error guard: blocks retry of quarantined version', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* suppress */ });
+    initAutoUpdater(mockWin);
+    // Real-world sequence: update-available sets target version, then error quarantines it
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    // Clear IPC calls from the error event before each test assertion
+    mockWebContents.send.mockClear();
+    mockDialog.showMessageBox.mockClear();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('does NOT set _updateDownloaded when the quarantined version is retried', () => {
+    // electron-updater retries and fires update-downloaded with the same version
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+    expect(getUpdateDownloaded()).toBe(false);
+  });
+
+  it('does NOT show the restart dialog when the quarantined retry is rejected', () => {
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    const restartCalls = mockDialog.showMessageBox.mock.calls.filter(
+      ([, opts]: [unknown, Electron.MessageBoxOptions]) => opts.title === 'Update ready',
+    );
+    expect(restartCalls).toHaveLength(0);
+  });
+
+  it('sends app:updateCancelled (not app:updateReady) when the retry is rejected', () => {
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    const channels = mockWebContents.send.mock.calls.map(([ch]: [string]) => ch);
+    expect(channels).toContain('app:updateCancelled');
+    expect(channels).not.toContain('app:updateReady');
+  });
+
+  it('logs a console.warn when the quarantined retry is rejected', () => {
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('rejected'),
+    );
+  });
+
+  it('does NOT block a clean first download when no prior error occurred', () => {
+    // Fresh init — no checksum error. Reset state and spy so the outer
+    // beforeEach's checksum-error warn call does not pollute this assertion.
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    initAutoUpdater(mockWin);
+    warnSpy.mockClear(); // clear warns emitted by beforeEach
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    expect(getUpdateDownloaded()).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('rejected'));
+  });
+
+  it('keeps _updateDownloaded false when the quarantined version is retried twice', () => {
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    // Two consecutive errors — badge must stay false
+    expect(getUpdateDownloaded()).toBe(false);
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+  });
+
+  it('sends app:updateCancelled for each error in the retry cycle', () => {
+    mockWebContents.send.mockClear();
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+
+    const cancelCalls = mockWebContents.send.mock.calls.filter(
+      ([channel]: [string]) => channel === 'app:updateCancelled',
+    );
+    // Each error event sends exactly one app:updateCancelled
+    expect(cancelCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does NOT block a different (newer) version — quarantine is version-scoped', () => {
+    // CLEAN_VERSION (3.0.0) was never quarantined — must install normally
+    mockAutoUpdater.emit('update-downloaded', { version: CLEAN_VERSION });
+    expect(getUpdateDownloaded()).toBe(true);
+  });
+});
+
+describe('initAutoUpdater — checksum-error guard: network-error retries are not quarantined', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    mockAutoUpdater.checkForUpdates.mockResolvedValue(null);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* suppress */ });
+    initAutoUpdater(mockWin);
+    // update-available fires to track target version
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('accepts the target version after a network error (network retries are safe)', () => {
+    // Network error does NOT set _checksumFailedVersion
+    mockAutoUpdater.emit('error', makeError('getaddrinfo ENOTFOUND update.example.com'));
+    expect(_checksumFailedVersion).toBeNull();
+
+    // Retry of the same version succeeds — file is genuinely valid
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    expect(getUpdateDownloaded()).toBe(true);
+  });
+
+  it('sends app:updateReady (not app:updateCancelled) when a network-error retry succeeds', () => {
+    mockAutoUpdater.emit('error', makeError('read ECONNRESET', 'ECONNRESET'));
+    mockWebContents.send.mockClear();
+
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    const channels = mockWebContents.send.mock.calls.map(([ch]: [string]) => ch);
+    expect(channels).toContain('app:updateReady');
+    expect(channels).not.toContain('app:updateCancelled');
+  });
+});
+
+describe('initAutoUpdater — checksum-error guard: recovery paths clear the quarantine', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetUpdaterStateForTesting();
+    mockAutoUpdater.removeAllListeners();
+    mockDialog.showMessageBox.mockClear();
+    mockWebContents.send.mockClear();
+    mockRm.mockClear();
+    mockAutoUpdater.checkForUpdates.mockClear();
+    // checkForUpdates never resolves — keeps _manualCheckPending true for the
+    // duration of the test so we can observe other state changes cleanly.
+    mockAutoUpdater.checkForUpdates.mockReturnValue(new Promise(() => { /* pending */ }));
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* suppress */ });
+    initAutoUpdater(mockWin);
+    // Simulate the normal sequence before a checksum error
+    mockAutoUpdater.emit('update-available', { version: TARGET_VERSION });
+    mockAutoUpdater.emit('error', makeError('checksum mismatch for file: update.exe'));
+    mockWebContents.send.mockClear();
+    mockDialog.showMessageBox.mockClear();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    mockAutoUpdater.removeAllListeners();
+    resetUpdaterStateForTesting();
+  });
+
+  it('clears _checksumFailedVersion when checkForUpdatesManually is called', () => {
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+
+    checkForUpdatesManually(mockWin);
+
+    expect(_checksumFailedVersion).toBeNull();
+  });
+
+  it('also clears _pendingUpdateVersion when checkForUpdatesManually is called', () => {
+    expect(_pendingUpdateVersion).toBe(TARGET_VERSION);
+
+    checkForUpdatesManually(mockWin);
+
+    expect(_pendingUpdateVersion).toBeNull();
+  });
+
+  it('allows the target version to install after a manual fresh check clears the quarantine', () => {
+    // Admin deliberately requests a fresh check — quarantine is cleared
+    checkForUpdatesManually(mockWin);
+
+    // Fresh download of the same version now proceeds normally
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    expect(getUpdateDownloaded()).toBe(true);
+  });
+
+  it('sends app:updateReady (not app:updateCancelled) after recovery via manual check', () => {
+    checkForUpdatesManually(mockWin);
+    mockWebContents.send.mockClear();
+
+    mockAutoUpdater.emit('update-downloaded', { version: TARGET_VERSION });
+
+    const channels = mockWebContents.send.mock.calls.map(([ch]: [string]) => ch);
+    expect(channels).toContain('app:updateReady');
+    expect(channels).not.toContain('app:updateCancelled');
+  });
+
+  it('clears _checksumFailedVersion when update-available fires (new check generation)', () => {
+    expect(_checksumFailedVersion).toBe(TARGET_VERSION);
+
+    // A new check found a newer release — fresh generation
+    mockAutoUpdater.emit('update-available', { version: CLEAN_VERSION });
+
+    expect(_checksumFailedVersion).toBeNull();
+  });
+
+  it('sets _pendingUpdateVersion to the new version when update-available fires', () => {
+    mockAutoUpdater.emit('update-available', { version: CLEAN_VERSION });
+    expect(_pendingUpdateVersion).toBe(CLEAN_VERSION);
+  });
+
+  it('allows a clean new-version download after update-available clears the quarantine', () => {
+    // A newer release was found — fresh check, new version
+    mockAutoUpdater.emit('update-available', { version: CLEAN_VERSION });
+    mockAutoUpdater.emit('update-downloaded', { version: CLEAN_VERSION });
+
+    expect(getUpdateDownloaded()).toBe(true);
   });
 });
