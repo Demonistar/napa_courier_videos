@@ -30111,6 +30111,7 @@ function SettingsPanel({
   const [uninstallError, setUninstallError] = reactExports.useState(null);
   const [uninstalling, setUninstalling] = reactExports.useState(false);
   const [mismatchConfirmOpen, setMismatchConfirmOpen] = reactExports.useState(false);
+  const [restartingUpdate, setRestartingUpdate] = reactExports.useState(false);
   reactExports.useEffect(() => {
     setLocalUser(currentUser);
   }, [currentUser]);
@@ -30484,9 +30485,15 @@ function SettingsPanel({
           {
             size: "sm",
             className: "gap-1.5 bg-green-600 hover:bg-green-700 text-white shrink-0",
-            onClick: () => window.electronAPI.app.quitAndInstall(),
+            disabled: restartingUpdate,
+            onClick: () => {
+              if (restartingUpdate) return;
+              setRestartingUpdate(true);
+              onOpenChange(false);
+              window.electronAPI.app.quitAndInstall();
+            },
             children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(RefreshCw, { className: "w-3.5 h-3.5" }),
+              restartingUpdate ? /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(RefreshCw, { className: "w-3.5 h-3.5" }),
               "Restart"
             ]
           }
@@ -75477,7 +75484,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-CzOXT142.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-BiksSs-t.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;

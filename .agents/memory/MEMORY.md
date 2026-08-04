@@ -1,0 +1,1 @@
+- [electron-app lockfile generation](electron-app-lockfile-gen.md) — use full `npm install --ignore-scripts` (not `--package-lock-only`) in clean /tmp; verify with `npm ci --ignore-scripts` before committing.
