@@ -22,10 +22,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
   Loader2, Link2, CheckCircle2, AlertTriangle, RefreshCw,
-  Download, ChevronRight, ArrowRight, ExternalLink,
+  Download, ChevronRight, ArrowRight, ExternalLink, FolderOpen, XCircle,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Location } from '@/lib/store';
+import { DropboxFolderBrowser } from '@/components/settings/DropboxFolderBrowser';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -142,7 +143,7 @@ function buildCsv(matched: MatchedUpdate[], unmatched: UnmatchedItem[]): string 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 type Status = 'idle' | 'loading' | 'review' | 'done' | 'error';
-type ReviewTab = 'matched' | 'unmatched';
+type ReviewTab = 'matched' | 'unmatched' | 'errors';
 
 export function GenerateLinksDialog({
   open,
@@ -160,6 +161,7 @@ export function GenerateLinksDialog({
   const [scanErrors, setScanErrors] = useState<RawResult[]>([]);
   const [activeTab, setActiveTab] = useState<ReviewTab>('matched');
   const [appliedCount, setAppliedCount] = useState(0);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   // Pre-fill the configured Dropbox folder path on first open.
   useEffect(() => {
@@ -179,6 +181,7 @@ export function GenerateLinksDialog({
       setScanErrors([]);
       setErrorMsg('');
       setActiveTab('matched');
+      setBrowserOpen(false);
     }
     onOpenChange(o);
   };
@@ -245,9 +248,12 @@ export function GenerateLinksDialog({
 
       setMatched(newMatched);
       setUnmatched(newUnmatched);
-      // If nothing matched, start on the unmatched tab so the admin isn't
-      // staring at an empty table.
-      setActiveTab(newMatched.length > 0 ? 'matched' : 'unmatched');
+      // Land on whichever tab actually has something to show, in priority
+      // order matched > unmatched > errors, so the admin isn't staring at
+      // an empty table when e.g. every file failed to generate a link.
+      if (newMatched.length > 0) setActiveTab('matched');
+      else if (newUnmatched.length > 0) setActiveTab('unmatched');
+      else setActiveTab('errors');
       setStatus('review');
     } catch (err: unknown) {
       setErrorMsg((err as Error).message);
@@ -326,6 +332,15 @@ export function GenerateLinksDialog({
             </p>
           </div>
           <Button
+            variant="outline"
+            onClick={() => setBrowserOpen(true)}
+            disabled={status === 'loading'}
+            className="mb-6 shrink-0"
+          >
+            <FolderOpen className="w-4 h-4 mr-2" />
+            Browse
+          </Button>
+          <Button
             onClick={handleScan}
             disabled={!folderPath.trim() || status === 'loading'}
             className="mb-6 shrink-0"
@@ -337,6 +352,17 @@ export function GenerateLinksDialog({
             )}
           </Button>
         </div>
+
+        <DropboxFolderBrowser
+          open={browserOpen}
+          onOpenChange={setBrowserOpen}
+          initialPath={folderPath}
+          detectedFolders={[]}
+          onSelect={(path) => {
+            setFolderPath(path);
+            setBrowserOpen(false);
+          }}
+        />
 
         {/* ── Loading ─────────────────────────────────────────────────── */}
         {status === 'loading' && (
@@ -411,6 +437,18 @@ export function GenerateLinksDialog({
               >
                 Unmatched ({unmatched.length})
               </button>
+              {scanErrors.length > 0 && (
+                <button
+                  onClick={() => setActiveTab('errors')}
+                  className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                    activeTab === 'errors'
+                      ? 'border-destructive text-destructive'
+                      : 'border-transparent text-destructive/70 hover:text-destructive'
+                  }`}
+                >
+                  Errors ({scanErrors.length})
+                </button>
+              )}
             </div>
 
             {/* ── Matched tab ─────────────────────────────────────────── */}
@@ -535,6 +573,31 @@ export function GenerateLinksDialog({
                   </ScrollArea>
                 )}
               </>
+            )}
+
+            {/* ── Errors tab ───────────────────────────────────────────── */}
+            {activeTab === 'errors' && (
+              <ScrollArea className="flex-1 border rounded-md">
+                <div className="divide-y text-sm">
+                  <div className="px-3 py-2 bg-destructive/5 text-xs font-medium text-destructive">
+                    These files scanned but Dropbox refused to create or fetch a
+                    shareable link for them. Nothing was matched or applied for
+                    these — fix the underlying issue in Dropbox (permissions,
+                    file state, rate limit) and re-scan.
+                  </div>
+                  {scanErrors.map((e, i) => (
+                    <div key={i} className="px-3 py-2.5 flex items-start gap-2">
+                      <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{e.name}</p>
+                        <p className="text-xs text-destructive/90 font-mono mt-0.5 break-words">
+                          {e.error || 'Unknown error'}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
             )}
 
             {/* Footer actions */}
