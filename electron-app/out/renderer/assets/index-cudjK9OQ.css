@@ -2541,7 +2541,17 @@
     color: var(--color-green-800);
   }
 
-  .text-muted-foreground, .text-muted-foreground\/30 {
+  .text-muted-foreground, .text-muted-foreground\/20 {
+    color: hsl(var(--muted-foreground));
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-muted-foreground\/20 {
+      color: color-mix(in oklab, hsl(var(--muted-foreground)) 20%, transparent);
+    }
+  }
+
+  .text-muted-foreground\/30 {
     color: hsl(var(--muted-foreground));
   }
 
@@ -2766,6 +2776,12 @@
 
   .transition-\[margin\,opacity\] {
     transition-property: margin, opacity;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+
+  .transition-\[stroke-dashoffset\] {
+    transition-property: stroke-dashoffset;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }

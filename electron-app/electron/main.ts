@@ -475,9 +475,40 @@ async function loadStagingFile(folder: string) {
   return { data, rev };
 }
 
-async function saveStagingFile(folder: string, data: unknown, rev: string): Promise<{ ok: boolean; conflict?: boolean; newRev?: string; error?: string }> {
+async function saveStagingFile(
+  folder: string,
+  data: unknown,
+  rev: string,
+  force = false,
+): Promise<{ ok: boolean; conflict?: boolean; newRev?: string; error?: string }> {
   try {
-    const mode = rev ? { update: rev } : 'overwrite' as const;
+    let mode: 'overwrite' | { update: string };
+    if (rev) {
+      // Normal path: use the rev we loaded — Dropbox rejects on mismatch
+      mode = { update: rev };
+    } else if (force) {
+      // Explicit admin-confirmed force-overwrite after conflict dialog
+      mode = 'overwrite';
+    } else {
+      // No rev and no explicit force — check whether the file already exists.
+      // A blind overwrite here would clobber data we've never loaded.
+      const metaResp = await dbxApi('/files/get_metadata', {
+        path: folderPath(folder, 'locations-staging.json'),
+      });
+      if (metaResp.ok) {
+        // File exists but caller has no rev — real conflict, reject save
+        return {
+          ok: false,
+          conflict: true,
+          error: 'Staging file already exists in Dropbox but this session has no rev for it. Reload before saving.',
+        };
+      }
+      if (metaResp.status !== 409) {
+        throw new Error(`Metadata check failed: ${metaResp.status}`);
+      }
+      // 409 → file does not exist → safe to create
+      mode = 'overwrite';
+    }
     const newRev = await dbxUpload(
       folderPath(folder, 'locations-staging.json'),
       JSON.stringify({ ...data as object, lastModified: new Date().toISOString() }, null, 2),
@@ -491,7 +522,12 @@ async function saveStagingFile(folder: string, data: unknown, rev: string): Prom
   }
 }
 
-async function publishToLive(folder: string, locations: unknown[], publishedBy: string): Promise<{ ok: boolean; error?: string }> {
+async function publishToLive(
+  folder: string,
+  locations: unknown[],
+  publishedBy: string,
+  liveRev = '',
+): Promise<{ ok: boolean; newRev?: string; conflict?: boolean; error?: string }> {
   try {
     const payload = {
       version: 1,
@@ -499,10 +535,41 @@ async function publishToLive(folder: string, locations: unknown[], publishedBy: 
       publishedBy,
       locations,
     };
-    await dbxUpload(folderPath(folder, 'locations-live.json'), JSON.stringify(payload, null, 2));
-    return { ok: true };
+
+    let mode: 'overwrite' | { update: string };
+    if (liveRev) {
+      // Use the rev we loaded — concurrent publish will produce a Dropbox 409
+      mode = { update: liveRev };
+    } else {
+      // No rev held — check whether the live file already exists before writing
+      const metaResp = await dbxApi('/files/get_metadata', {
+        path: folderPath(folder, 'locations-live.json'),
+      });
+      if (metaResp.ok) {
+        // File exists but we have no rev — would clobber content we haven't loaded
+        return {
+          ok: false,
+          conflict: true,
+          error: 'The live file exists in Dropbox but this session has no rev for it. Reload before publishing.',
+        };
+      }
+      if (metaResp.status !== 409) {
+        throw new Error(`Metadata check failed: ${metaResp.status}`);
+      }
+      // 409 → file does not exist → first publish, safe to create
+      mode = 'overwrite';
+    }
+
+    const newRev = await dbxUpload(
+      folderPath(folder, 'locations-live.json'),
+      JSON.stringify(payload, null, 2),
+      mode,
+    );
+    return { ok: true, newRev };
   } catch (err: unknown) {
-    return { ok: false, error: (err as Error).message };
+    const e = err as Error & { code?: string };
+    if (e.code === 'CONFLICT') return { ok: false, conflict: true, error: e.message };
+    return { ok: false, error: e.message };
   }
 }
 
@@ -643,22 +710,22 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('data:saveStaging', async (_event, data: unknown, rev: string) => {
+  ipcMain.handle('data:saveStaging', async (_event, data: unknown, rev: string, force = false) => {
     const { dropboxFolderPath } = loadSettings();
-    return saveStagingFile(dropboxFolderPath, data, rev);
+    return saveStagingFile(dropboxFolderPath, data, rev, force);
   });
 
-  ipcMain.handle('data:publish', async (_event, locations: unknown[], publishedBy: string) => {
+  ipcMain.handle('data:publish', async (_event, locations: unknown[], publishedBy: string, liveRev = '') => {
     const { dropboxFolderPath } = loadSettings();
-    return publishToLive(dropboxFolderPath, locations, publishedBy);
+    return publishToLive(dropboxFolderPath, locations, publishedBy, liveRev);
   });
 
   ipcMain.handle('data:loadLive', async () => {
     const { dropboxFolderPath } = loadSettings();
     try {
       const result = await dbxDownload(folderPath(dropboxFolderPath, 'locations-live.json'));
-      if (!result) return { ok: true, data: null }; // live file doesn't exist yet
-      return { ok: true, data: JSON.parse(result.content) };
+      if (!result) return { ok: true, data: null, rev: '' }; // live file doesn't exist yet
+      return { ok: true, data: JSON.parse(result.content), rev: result.rev };
     } catch (err: unknown) {
       return { ok: false, error: (err as Error).message };
     }

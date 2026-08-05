@@ -114,10 +114,14 @@ export function useLocationStore() {
   const [isSaving, setIsSaving] = useState(false);
   const [hasConflict, setHasConflict] = useState(false);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  // Hard errors from background sync or load — watched by AdminDashboard for toast
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [cachedBackups, setCachedBackups] = useState<BackupEntry[]>([]);
 
   // Current Dropbox rev of locations-staging.json — used for write-safety
   const stagingRevRef = useRef('');
+  // Current Dropbox rev of locations-live.json — used for safe publish
+  const liveRevRef = useRef('');
   // Whether we've completed the initial load (don't save before first load)
   const initializedRef = useRef(false);
   // Pending state to save (we save the latest version after debounce)
@@ -136,9 +140,17 @@ export function useLocationStore() {
         window.electronAPI.data.loadLive(),
       ]);
 
-      if (stagingResult.ok && stagingResult.data) {
+      if (!stagingResult.ok) {
+        // Real error (network, API failure) — surface it as a toast in the dashboard
+        setSaveError(stagingResult.error ?? 'Failed to load from Dropbox.');
+      } else if (stagingResult.data) {
         const data = stagingResult.data as StagingPayload;
         stagingRevRef.current = stagingResult.rev ?? '';
+
+        // Capture live rev so publish() can use safe update mode
+        if (liveResult.ok) {
+          liveRevRef.current = liveResult.rev ?? '';
+        }
 
         // Published locations come from the live file (may be null if never published)
         const liveData = liveResult.ok && liveResult.data
@@ -154,6 +166,7 @@ export function useLocationStore() {
       }
     } catch (err) {
       console.error('Failed to load from Dropbox:', err);
+      setSaveError((err as Error).message ?? 'Failed to load from Dropbox.');
     } finally {
       setIsLoading(false);
       initializedRef.current = true;
@@ -179,12 +192,17 @@ export function useLocationStore() {
       if (result.ok && result.newRev) {
         stagingRevRef.current = result.newRev;
         setHasConflict(false);
+        setSaveError(null);
       } else if (result.conflict) {
         setHasConflict(true);
         setConflictMessage(result.error ?? 'Another admin saved changes since you loaded.');
+      } else if (!result.ok) {
+        // Hard write error (network, quota, etc.) — surface as a toast
+        setSaveError(result.error ?? 'Failed to save to Dropbox.');
       }
     } catch (err) {
       console.error('Sync failed:', err);
+      setSaveError((err as Error).message ?? 'Failed to save to Dropbox.');
     } finally {
       setIsSaving(false);
     }
@@ -289,26 +307,41 @@ export function useLocationStore() {
 
   const setCurrentUser = useCallback((username: string) => {
     setAppState((prev) => {
+      // No-op when username is unchanged — avoids scheduling a spurious sync
+      // that would fire with stale (possibly empty) locations before loadFromDropbox
+      // has populated state (Bug 3 fix).
+      if (prev.currentUser === username) return prev;
       const next = { ...prev, currentUser: username };
-      scheduleSync(next);
+      // Only persist if the initial load has already completed.
+      // Before that, scheduleSync would race against loadFromDropbox and could
+      // overwrite staging with an empty locations array.
+      if (initializedRef.current) {
+        scheduleSync(next);
+      }
       return next;
     });
   }, [scheduleSync]);
 
   // ── Publish ────────────────────────────────────────────────────────────────
 
-  const publish = useCallback(async () => {
+  const publish = useCallback(async (): Promise<{ ok: boolean; conflict?: boolean; error?: string }> => {
     setIsSaving(true);
     try {
       await pushBackup('Published to Live', appState, null, null);
-      const result = await window.electronAPI.data.publish(appState.locations, appState.currentUser);
+      const result = await window.electronAPI.data.publish(
+        appState.locations,
+        appState.currentUser,
+        liveRevRef.current,
+      );
       if (result.ok) {
+        // Track the new rev so the next publish uses safe update mode
+        if (result.newRev) liveRevRef.current = result.newRev;
         setAppState((prev) => ({ ...prev, publishedLocations: prev.locations }));
       }
-      return result.ok;
+      return result;
     } catch (err) {
       console.error('Publish failed:', err);
-      return false;
+      return { ok: false, error: (err as Error).message };
     } finally {
       setIsSaving(false);
     }
@@ -394,7 +427,7 @@ export function useLocationStore() {
           auditLog: appState.auditLog,
           currentUser: appState.currentUser,
         };
-        const result = await window.electronAPI.data.saveStaging(payload, ''); // '' = overwrite
+        const result = await window.electronAPI.data.saveStaging(payload, '', true); // force=true: explicit admin override
         if (result.ok && result.newRev) stagingRevRef.current = result.newRev;
       } finally {
         setIsSaving(false);
@@ -466,6 +499,7 @@ export function useLocationStore() {
     isSaving,
     hasConflict,
     conflictMessage,
+    saveError,
     pendingChangesCount,
 
     addLocation,

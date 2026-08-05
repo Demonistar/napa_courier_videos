@@ -9,8 +9,8 @@ const api = {
   data: {
     loadStaging: () => electron.ipcRenderer.invoke("data:loadStaging"),
     loadLive: () => electron.ipcRenderer.invoke("data:loadLive"),
-    saveStaging: (data, rev) => electron.ipcRenderer.invoke("data:saveStaging", data, rev),
-    publish: (locations, publishedBy) => electron.ipcRenderer.invoke("data:publish", locations, publishedBy),
+    saveStaging: (data, rev, force) => electron.ipcRenderer.invoke("data:saveStaging", data, rev, force),
+    publish: (locations, publishedBy, liveRev) => electron.ipcRenderer.invoke("data:publish", locations, publishedBy, liveRev),
     listBackups: () => electron.ipcRenderer.invoke("data:listBackups"),
     loadBackup: (dropboxPath) => electron.ipcRenderer.invoke("data:loadBackup", dropboxPath),
     saveBackup: (entry) => electron.ipcRenderer.invoke("data:saveBackup", entry)

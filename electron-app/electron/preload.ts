@@ -50,12 +50,12 @@ const api = {
   data: {
     loadStaging: (): Promise<{ ok: boolean; data?: unknown; rev?: string; error?: string }> =>
       ipcRenderer.invoke('data:loadStaging'),
-    loadLive: (): Promise<{ ok: boolean; data?: unknown; error?: string }> =>
+    loadLive: (): Promise<{ ok: boolean; data?: unknown; rev?: string; error?: string }> =>
       ipcRenderer.invoke('data:loadLive'),
-    saveStaging: (data: unknown, rev: string): Promise<{ ok: boolean; conflict?: boolean; newRev?: string; error?: string }> =>
-      ipcRenderer.invoke('data:saveStaging', data, rev),
-    publish: (locations: unknown[], publishedBy: string): Promise<{ ok: boolean; error?: string }> =>
-      ipcRenderer.invoke('data:publish', locations, publishedBy),
+    saveStaging: (data: unknown, rev: string, force?: boolean): Promise<{ ok: boolean; conflict?: boolean; newRev?: string; error?: string }> =>
+      ipcRenderer.invoke('data:saveStaging', data, rev, force),
+    publish: (locations: unknown[], publishedBy: string, liveRev?: string): Promise<{ ok: boolean; newRev?: string; conflict?: boolean; error?: string }> =>
+      ipcRenderer.invoke('data:publish', locations, publishedBy, liveRev),
     listBackups: (): Promise<{ ok: boolean; backups?: BackupMeta[]; error?: string }> =>
       ipcRenderer.invoke('data:listBackups'),
     loadBackup: (dropboxPath: string): Promise<{ ok: boolean; snapshot?: unknown; error?: string }> =>

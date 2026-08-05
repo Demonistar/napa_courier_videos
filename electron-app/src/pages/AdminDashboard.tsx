@@ -50,6 +50,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     isSaving,
     hasConflict,
     conflictMessage,
+    saveError,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -77,6 +78,13 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
       setCurrentUser(initialUser);
     }
   }, [dropboxUser.connected, dropboxUser.name, initialUser]);
+
+  // Surface hard save/load errors as a destructive toast
+  useEffect(() => {
+    if (saveError) {
+      toast({ title: 'Dropbox error', description: saveError, variant: 'destructive' });
+    }
+  }, [saveError]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
@@ -245,12 +253,22 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
   const handlePublish = () => setPublishDialogOpen(true);
 
   const confirmPublish = async () => {
-    const ok = await publish();
+    const result = await publish();
     setPublishDialogOpen(false);
-    if (ok) {
+    if (result.ok) {
       toast({ title: 'Published', description: 'All changes are now live for drivers.' });
+    } else if (result.conflict) {
+      toast({
+        title: 'Publish conflict',
+        description: result.error ?? 'Another admin published since you loaded. Reload, then try again.',
+        variant: 'destructive',
+      });
     } else {
-      toast({ title: 'Publish failed', description: 'Could not write to Dropbox. Check your connection.', variant: 'destructive' });
+      toast({
+        title: 'Publish failed',
+        description: result.error ?? 'Could not write to Dropbox. Check your connection.',
+        variant: 'destructive',
+      });
     }
   };
 

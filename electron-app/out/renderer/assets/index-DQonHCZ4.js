@@ -22956,8 +22956,10 @@ function useLocationStore() {
   const [isSaving, setIsSaving] = reactExports.useState(false);
   const [hasConflict, setHasConflict] = reactExports.useState(false);
   const [conflictMessage, setConflictMessage] = reactExports.useState(null);
+  const [saveError, setSaveError] = reactExports.useState(null);
   const [cachedBackups, setCachedBackups] = reactExports.useState([]);
   const stagingRevRef = reactExports.useRef("");
+  const liveRevRef = reactExports.useRef("");
   const initializedRef = reactExports.useRef(false);
   const pendingSaveRef = reactExports.useRef(null);
   const saveTimerRef = reactExports.useRef(null);
@@ -22970,9 +22972,14 @@ function useLocationStore() {
         window.electronAPI.data.loadStaging(),
         window.electronAPI.data.loadLive()
       ]);
-      if (stagingResult.ok && stagingResult.data) {
+      if (!stagingResult.ok) {
+        setSaveError(stagingResult.error ?? "Failed to load from Dropbox.");
+      } else if (stagingResult.data) {
         const data = stagingResult.data;
         stagingRevRef.current = stagingResult.rev ?? "";
+        if (liveResult.ok) {
+          liveRevRef.current = liveResult.rev ?? "";
+        }
         const liveData = liveResult.ok && liveResult.data ? liveResult.data.locations ?? [] : [];
         setAppState({
           locations: data.locations ?? [],
@@ -22983,6 +22990,7 @@ function useLocationStore() {
       }
     } catch (err) {
       console.error("Failed to load from Dropbox:", err);
+      setSaveError(err.message ?? "Failed to load from Dropbox.");
     } finally {
       setIsLoading(false);
       initializedRef.current = true;
@@ -23004,12 +23012,16 @@ function useLocationStore() {
       if (result.ok && result.newRev) {
         stagingRevRef.current = result.newRev;
         setHasConflict(false);
+        setSaveError(null);
       } else if (result.conflict) {
         setHasConflict(true);
         setConflictMessage(result.error ?? "Another admin saved changes since you loaded.");
+      } else if (!result.ok) {
+        setSaveError(result.error ?? "Failed to save to Dropbox.");
       }
     } catch (err) {
       console.error("Sync failed:", err);
+      setSaveError(err.message ?? "Failed to save to Dropbox.");
     } finally {
       setIsSaving(false);
     }
@@ -23092,8 +23104,11 @@ function useLocationStore() {
   );
   const setCurrentUser = reactExports.useCallback((username) => {
     setAppState((prev) => {
+      if (prev.currentUser === username) return prev;
       const next = { ...prev, currentUser: username };
-      scheduleSync(next);
+      if (initializedRef.current) {
+        scheduleSync(next);
+      }
       return next;
     });
   }, [scheduleSync]);
@@ -23101,14 +23116,19 @@ function useLocationStore() {
     setIsSaving(true);
     try {
       await pushBackup("Published to Live", appState, null, null);
-      const result = await window.electronAPI.data.publish(appState.locations, appState.currentUser);
+      const result = await window.electronAPI.data.publish(
+        appState.locations,
+        appState.currentUser,
+        liveRevRef.current
+      );
       if (result.ok) {
+        if (result.newRev) liveRevRef.current = result.newRev;
         setAppState((prev) => ({ ...prev, publishedLocations: prev.locations }));
       }
-      return result.ok;
+      return result;
     } catch (err) {
       console.error("Publish failed:", err);
-      return false;
+      return { ok: false, error: err.message };
     } finally {
       setIsSaving(false);
     }
@@ -23173,7 +23193,7 @@ function useLocationStore() {
           auditLog: appState.auditLog,
           currentUser: appState.currentUser
         };
-        const result = await window.electronAPI.data.saveStaging(payload, "");
+        const result = await window.electronAPI.data.saveStaging(payload, "", true);
         if (result.ok && result.newRev) stagingRevRef.current = result.newRev;
       } finally {
         setIsSaving(false);
@@ -23240,6 +23260,7 @@ function useLocationStore() {
     isSaving,
     hasConflict,
     conflictMessage,
+    saveError,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -26163,6 +26184,8 @@ function HelpMenu({ onStartTour, onOpenBackup }) {
     ] })
   ] });
 }
+const RING_R = 18;
+const RING_C = 2 * Math.PI * RING_R;
 function TopBar({
   searchQuery,
   onSearchChange,
@@ -26180,8 +26203,12 @@ function TopBar({
   onOpenImport,
   onOpenGenerateLinks,
   dropboxUser,
-  updateReady = false
+  updateReady = false,
+  downloadProgress = null
 }) {
+  const isDownloading = downloadProgress !== null && !updateReady;
+  const pct = Math.max(0, Math.min(100, downloadProgress?.percent ?? 0));
+  const dashOffset = RING_C * (1 - pct / 100);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 shrink-0", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "w-1 h-8 bg-primary rounded-full" }),
@@ -26292,6 +26319,45 @@ function TopBar({
             className: "relative",
             children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(Settings, { className: "w-5 h-5" }),
+              isDownloading && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "svg",
+                {
+                  "aria-label": `Downloading update… ${Math.round(pct)}%`,
+                  className: "absolute inset-0 w-full h-full pointer-events-none",
+                  viewBox: "0 0 40 40",
+                  "data-testid": "download-progress-ring",
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "circle",
+                      {
+                        cx: "20",
+                        cy: "20",
+                        r: RING_R,
+                        fill: "none",
+                        stroke: "currentColor",
+                        strokeWidth: "2",
+                        className: "text-muted-foreground/20"
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "circle",
+                      {
+                        cx: "20",
+                        cy: "20",
+                        r: RING_R,
+                        fill: "none",
+                        stroke: "currentColor",
+                        strokeWidth: "2.5",
+                        strokeLinecap: "round",
+                        strokeDasharray: RING_C,
+                        strokeDashoffset: dashOffset,
+                        transform: "rotate(-90 20 20)",
+                        className: "text-blue-500 transition-[stroke-dashoffset] duration-300 ease-linear"
+                      }
+                    )
+                  ]
+                }
+              ),
               updateReady && /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "span",
                 {
@@ -26302,7 +26368,7 @@ function TopBar({
             ]
           }
         ) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipContent, { children: updateReady ? "Update ready — open Settings to install" : "Settings & Dropbox" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipContent, { children: updateReady ? "Update ready — open Settings to install" : isDownloading ? `Downloading update… ${Math.round(pct)}%` : "Settings & Dropbox" })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(DropdownMenu, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(DropdownMenuTrigger, { asChild: true, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "ghost", size: "icon", "data-testid": "button-help", children: /* @__PURE__ */ jsxRuntimeExports.jsx(CircleQuestionMark, { className: "w-5 h-5" }) }) }),
@@ -75484,7 +75550,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-BiksSs-t.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-ZUmVm-XZ.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -76402,6 +76468,7 @@ function AdminDashboard({ onLogout, initialUser }) {
     isSaving,
     hasConflict,
     conflictMessage,
+    saveError,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -76425,6 +76492,11 @@ function AdminDashboard({ onLogout, initialUser }) {
       setCurrentUser(initialUser);
     }
   }, [dropboxUser.connected, dropboxUser.name, initialUser]);
+  reactExports.useEffect(() => {
+    if (saveError) {
+      toast2({ title: "Dropbox error", description: saveError, variant: "destructive" });
+    }
+  }, [saveError]);
   const [searchQuery, setSearchQuery] = reactExports.useState("");
   const [selectedLocationId, setSelectedLocationId] = reactExports.useState(null);
   const [viewMode, setViewMode] = reactExports.useState("default");
@@ -76566,12 +76638,22 @@ function AdminDashboard({ onLogout, initialUser }) {
   };
   const handlePublish = () => setPublishDialogOpen(true);
   const confirmPublish = async () => {
-    const ok = await publish();
+    const result = await publish();
     setPublishDialogOpen(false);
-    if (ok) {
+    if (result.ok) {
       toast2({ title: "Published", description: "All changes are now live for drivers." });
+    } else if (result.conflict) {
+      toast2({
+        title: "Publish conflict",
+        description: result.error ?? "Another admin published since you loaded. Reload, then try again.",
+        variant: "destructive"
+      });
     } else {
-      toast2({ title: "Publish failed", description: "Could not write to Dropbox. Check your connection.", variant: "destructive" });
+      toast2({
+        title: "Publish failed",
+        description: result.error ?? "Could not write to Dropbox. Check your connection.",
+        variant: "destructive"
+      });
     }
   };
   const handleImportLocations = (rows, source) => {
@@ -76644,7 +76726,8 @@ function AdminDashboard({ onLogout, initialUser }) {
         },
         onOpenGenerateLinks: () => setGenerateLinksOpen(true),
         dropboxUser,
-        updateReady
+        updateReady,
+        downloadProgress
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-hidden", children: /* @__PURE__ */ jsxRuntimeExports.jsxs(PanelGroup, { direction: "horizontal", children: [

@@ -514,9 +514,29 @@ async function loadStagingFile(folder) {
   }
   return { data, rev };
 }
-async function saveStagingFile(folder, data, rev) {
+async function saveStagingFile(folder, data, rev, force = false) {
   try {
-    const mode = rev ? { update: rev } : "overwrite";
+    let mode;
+    if (rev) {
+      mode = { update: rev };
+    } else if (force) {
+      mode = "overwrite";
+    } else {
+      const metaResp = await dbxApi("/files/get_metadata", {
+        path: folderPath(folder, "locations-staging.json")
+      });
+      if (metaResp.ok) {
+        return {
+          ok: false,
+          conflict: true,
+          error: "Staging file already exists in Dropbox but this session has no rev for it. Reload before saving."
+        };
+      }
+      if (metaResp.status !== 409) {
+        throw new Error(`Metadata check failed: ${metaResp.status}`);
+      }
+      mode = "overwrite";
+    }
     const newRev = await dbxUpload(
       folderPath(folder, "locations-staging.json"),
       JSON.stringify({ ...data, lastModified: (/* @__PURE__ */ new Date()).toISOString() }, null, 2),
@@ -529,7 +549,7 @@ async function saveStagingFile(folder, data, rev) {
     return { ok: false, error: e.message };
   }
 }
-async function publishToLive(folder, locations, publishedBy) {
+async function publishToLive(folder, locations, publishedBy, liveRev = "") {
   try {
     const payload = {
       version: 1,
@@ -537,10 +557,35 @@ async function publishToLive(folder, locations, publishedBy) {
       publishedBy,
       locations
     };
-    await dbxUpload(folderPath(folder, "locations-live.json"), JSON.stringify(payload, null, 2));
-    return { ok: true };
+    let mode;
+    if (liveRev) {
+      mode = { update: liveRev };
+    } else {
+      const metaResp = await dbxApi("/files/get_metadata", {
+        path: folderPath(folder, "locations-live.json")
+      });
+      if (metaResp.ok) {
+        return {
+          ok: false,
+          conflict: true,
+          error: "The live file exists in Dropbox but this session has no rev for it. Reload before publishing."
+        };
+      }
+      if (metaResp.status !== 409) {
+        throw new Error(`Metadata check failed: ${metaResp.status}`);
+      }
+      mode = "overwrite";
+    }
+    const newRev = await dbxUpload(
+      folderPath(folder, "locations-live.json"),
+      JSON.stringify(payload, null, 2),
+      mode
+    );
+    return { ok: true, newRev };
   } catch (err) {
-    return { ok: false, error: err.message };
+    const e = err;
+    if (e.code === "CONFLICT") return { ok: false, conflict: true, error: e.message };
+    return { ok: false, error: e.message };
   }
 }
 const MAX_BACKUPS = 20;
@@ -643,20 +688,20 @@ function registerIpcHandlers() {
       return { ok: false, error: err.message };
     }
   });
-  electron.ipcMain.handle("data:saveStaging", async (_event, data, rev) => {
+  electron.ipcMain.handle("data:saveStaging", async (_event, data, rev, force = false) => {
     const { dropboxFolderPath } = loadSettings();
-    return saveStagingFile(dropboxFolderPath, data, rev);
+    return saveStagingFile(dropboxFolderPath, data, rev, force);
   });
-  electron.ipcMain.handle("data:publish", async (_event, locations, publishedBy) => {
+  electron.ipcMain.handle("data:publish", async (_event, locations, publishedBy, liveRev = "") => {
     const { dropboxFolderPath } = loadSettings();
-    return publishToLive(dropboxFolderPath, locations, publishedBy);
+    return publishToLive(dropboxFolderPath, locations, publishedBy, liveRev);
   });
   electron.ipcMain.handle("data:loadLive", async () => {
     const { dropboxFolderPath } = loadSettings();
     try {
       const result = await dbxDownload(folderPath(dropboxFolderPath, "locations-live.json"));
-      if (!result) return { ok: true, data: null };
-      return { ok: true, data: JSON.parse(result.content) };
+      if (!result) return { ok: true, data: null, rev: "" };
+      return { ok: true, data: JSON.parse(result.content), rev: result.rev };
     } catch (err) {
       return { ok: false, error: err.message };
     }
