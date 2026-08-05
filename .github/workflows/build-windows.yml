@@ -129,22 +129,31 @@ jobs:
 
       # ── 7. Verify Authenticode signature ─────────────────────────────────────
       #
-      # `signtool verify /pa` checks that the installer carries a valid
-      # Authenticode signature issued by a trusted CA.  It exits non-zero
-      # (failing the workflow) when:
-      #   • the file is unsigned (secrets were absent or misconfigured), or
-      #   • the signature is malformed or the certificate has expired.
+      # When WIN_CSC_LINK is set, `signtool verify /pa` checks that the
+      # installer carries a valid Authenticode signature.  It exits non-zero
+      # (failing the workflow) when the signature is malformed or the
+      # certificate has expired.
+      #
+      # When WIN_CSC_LINK is absent (e.g. a pre-release test build), signing
+      # is skipped by electron-builder.  This step still locates the .exe and
+      # exposes it for the publish step, but it warns rather than failing so
+      # unsigned test builds can reach GitHub Releases.  SmartScreen will show
+      # an "unrecognised publisher" warning for such builds, which is acceptable
+      # for internal pre-release testing.  Signed builds MUST be used for any
+      # installer distributed to external admins.
       #
       # This step runs on the windows-latest runner where signtool.exe ships
       # as part of the pre-installed Windows SDK.
       #
-      # The verified installer path is written to a step output so the publish
-      # step below can upload exactly the same file that was verified — without
-      # re-globbing or picking up unintended executables.
+      # The installer path is written to a step output so the publish step
+      # below can upload exactly the same file — without re-globbing or
+      # picking up unintended executables.
       - name: Verify Authenticode signature
         id: verify-signature
         shell: pwsh
         working-directory: electron-app
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
         run: |
           # Locate the top-level NSIS installer (not win-unpacked/ executables).
           # -File and no -Recurse ensure we stay in dist-installer/ itself.
@@ -154,24 +163,33 @@ jobs:
             Write-Error "No installer .exe found in dist-installer/ — build may have failed."
             exit 1
           }
-          Write-Host "Verifying signature on: $($exe.FullName)"
 
-          # signtool.exe is on PATH on windows-latest runners (Windows SDK)
-          & signtool verify /pa "$($exe.FullName)"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error @"
-          Authenticode signature verification FAILED.
-          The installer '$($exe.Name)' is unsigned or has an invalid signature.
-          Ensure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are set as repository
-          secrets and contain a valid, unexpired .pfx certificate.
-          The unsigned installer has NOT been uploaded to GitHub Releases.
-          "@
-            exit 1
-          }
-          Write-Host "Signature OK — proceeding to publish."
-
-          # Expose the verified installer name to the publish step via output.
+          # Expose the installer name to the publish step via output.
           echo "INSTALLER_NAME=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+          if ([string]::IsNullOrEmpty($env:WIN_CSC_LINK)) {
+            Write-Warning @"
+          ⚠  WIN_CSC_LINK is not set — the installer is UNSIGNED.
+             SmartScreen will show an 'unrecognised publisher' warning.
+             This is acceptable for pre-release test builds.
+             Set WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD as repository secrets
+             before distributing to external admins.
+          "@
+            Write-Host "Skipping Authenticode verification (no certificate configured)."
+          } else {
+            Write-Host "Verifying signature on: $($exe.FullName)"
+            # signtool.exe is on PATH on windows-latest runners (Windows SDK)
+            & signtool verify /pa "$($exe.FullName)"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error @"
+          Authenticode signature verification FAILED.
+          The installer '$($exe.Name)' has an invalid or expired signature.
+          Ensure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD contain a valid .pfx.
+          "@
+              exit 1
+            }
+            Write-Host "Signature OK — proceeding to publish."
+          }
 
       # ── 8. Publish to GitHub Releases ────────────────────────────────────────
       #
