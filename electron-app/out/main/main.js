@@ -659,7 +659,6 @@ function registerIpcHandlers() {
   });
   electron.ipcMain.handle("auth:login", async () => {
     try {
-      if (!DROPBOX_APP_KEY) ;
       const token = await runOAuthFlow();
       const resp = await fetch("https://api.dropboxapi.com/2/users/get_current_account", {
         method: "POST",
@@ -820,8 +819,15 @@ You can remove the app manually via Windows Settings → Apps → Installed apps
         options: { filename_only: true }
       });
       if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
-      const data = await resp.json();
-      const folders = (data.matches ?? []).filter(
+      let page = await resp.json();
+      const allMatches = [...page.matches ?? []];
+      while (page.has_more) {
+        const contResp = await dbxApi("/files/search_v2/continue", { cursor: page.cursor });
+        if (!contResp.ok) throw new Error(`Search continue failed: ${contResp.status}`);
+        page = await contResp.json();
+        allMatches.push(...page.matches ?? []);
+      }
+      const folders = allMatches.filter(
         (m) => m?.metadata?.metadata?.[".tag"] === "folder" && m?.metadata?.metadata?.name?.toLowerCase() === "napa admin data"
       ).map((m) => ({
         name: m.metadata.metadata.name,

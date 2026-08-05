@@ -24,14 +24,8 @@ import crypto from 'node:crypto';
 
 // ─── Build-time config (set via .env before running `pnpm run package`) ───────
 
-const DROPBOX_APP_KEY = process.env.DROPBOX_APP_KEY ?? '';
-const DEFAULT_FOLDER_PATH = process.env.DROPBOX_FOLDER_PATH ?? '/NAPA Courier Admin';
-
-if (!DROPBOX_APP_KEY) {
-  console.warn(
-    '[NAPA] DROPBOX_APP_KEY not set. Copy .env.example to .env and fill in your Dropbox App Key.',
-  );
-}
+const DROPBOX_APP_KEY = process.env.DROPBOX_APP_KEY ?? '2nrt3uf9qy4oosn';
+const DEFAULT_FOLDER_PATH = process.env.DROPBOX_FOLDER_PATH ?? '/Delivery Optimization/Delivery Walk Through Videos';
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -673,9 +667,6 @@ function registerIpcHandlers() {
 
   ipcMain.handle('auth:login', async () => {
     try {
-      if (!DROPBOX_APP_KEY) {
-        return { ok: false, error: 'DROPBOX_APP_KEY is not configured. See .env.example.' };
-      }
       const token = await runOAuthFlow();
       // Fetch user info immediately
       const resp = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
