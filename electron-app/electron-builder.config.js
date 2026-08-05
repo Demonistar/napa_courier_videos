@@ -59,8 +59,8 @@ const config = {
   // ── NSIS installer ─────────────────────────────────────────────────────────
   nsis: {
     oneClick:                        false,
+    perMachine:                      false,   // per-user install → always shows wizard, no UAC needed
     allowToChangeInstallationDirectory: true,
-    allowElevation:                  true,
     createDesktopShortcut:           true,
     createStartMenuShortcut:         true,
     shortcutName:                    'NAPA Courier Admin',
