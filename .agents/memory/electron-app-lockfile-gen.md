@@ -1,36 +1,37 @@
 ---
-name: electron-app lockfile generation
-description: Correct method to regenerate electron-app/package-lock.json so npm ci passes on Windows
+name: electron-app lockfile generation and CI build
+description: How to correctly generate package-lock.json for the electron-app and build the Windows installer in CI
 ---
 
-# electron-app/package-lock.json regeneration
+# electron-app lockfile and Windows CI build
 
-## The rule
-Always use `npm install --ignore-scripts` (full install) — NOT `npm install --package-lock-only` — when regenerating the lockfile in a clean /tmp directory.
+## Lockfile generation rule
+The `electron-app/package-lock.json` must be generated OUTSIDE the pnpm workspace (in a clean /tmp directory with a copy of just electron-app/package.json). If generated inside the workspace, npm resolves ~45 packages via the pnpm store instead of ~522 standalone, and electron-vite goes missing.
 
-**Why:** `--package-lock-only` skips full dependency tree resolution for optional platform packages. It leaves `resolved` URLs empty for packages like `@emnapi/core` (nested under `@tailwindcss/oxide-wasm32-wasi`). When `npm ci` runs on Windows it hits "Missing: @emnapi/core@x.y.z from lock file" and aborts.
+**Why:** pnpm's store reuse causes npm to resolve packages differently when a pnpm-managed node_modules tree is present.
 
-**How to apply:** Every time `electron-app/package-lock.json` must be regenerated:
+**How to apply:** Run `scripts/regen-lockfile.sh` from repo root, or manually: copy `electron-app/package.json` to a temp dir, run `npm install --ignore-scripts`, verify with `npm ci --ignore-scripts`, then copy back. See `electron-app/README.md` Rebuilding section.
 
-```bash
-rm -rf /tmp/lockgen /tmp/locktest
-mkdir /tmp/lockgen
-cp electron-app/package.json /tmp/lockgen/package.json
-# Full install (not --package-lock-only):
-cd /tmp/lockgen && npm install --ignore-scripts --registry https://registry.npmjs.org
+## Windows CI: use npm ci, NOT pnpm install
 
-# Verify before copying back:
-mkdir /tmp/locktest
-cp /tmp/lockgen/package.json /tmp/locktest/
-cp /tmp/lockgen/package-lock.json /tmp/locktest/
-cd /tmp/locktest && npm ci --ignore-scripts   # must pass with zero "Missing:" errors
+**Rule:** In `.github/workflows/build-windows.yml`, install electron-app deps with `npm ci --ignore-scripts` inside the `electron-app/` directory — NOT `pnpm install` from the workspace root.
 
-cp /tmp/lockgen/package-lock.json electron-app/package-lock.json
-```
+**Why:** `pnpm-lock.yaml` is generated on Linux and marks Windows-specific optional native binaries (e.g. `@rollup/rollup-win32-x64-msvc`) as excluded (`'-'`). Even without `--frozen-lockfile`, pnpm respects these exclusions on the Windows runner, causing electron-vite build to fail with "Cannot find module @rollup/rollup-win32-x64-msvc". npm ci correctly installs platform-specific optional natives for the current runner OS.
 
-Then run `npm run build` in `electron-app` as a second confirmation before committing.
+**How to apply:** The step should be `working-directory: electron-app` and run `npm ci --ignore-scripts`.
 
-## Additional constraints
-- Never run `npm install` inside the pnpm workspace root — it writes pnpm store paths (`../node_modules/.pnpm/...`) as `resolved` URLs, which break `npm ci` on Windows.
-- The lockgen /tmp directory must be completely fresh each time (no leftover lockfile from a previous run).
-- `--registry https://registry.npmjs.org` must be specified to bypass any Replit package firewall.
+## electron-builder config auto-discovery on Windows
+
+**Rule:** Always pass `--config electron-builder.config.js` explicitly when invoking electron-builder in CI.
+
+**Why:** On Windows runners, `npx electron-builder` does not always auto-discover `electron-builder.config.js`. Without it, electron-builder uses defaults (`dist/` output, `oneClick: true`, etc.) instead of the project's configured settings.
+
+**How to apply:** `npx electron-builder --win --publish never --config electron-builder.config.js`
+
+## electron-builder v26 schema changes
+
+**Rule:** `signingHashAlgorithms` is NOT a valid field in `WindowsConfiguration` for electron-builder v26+. It was valid in v25.
+
+**Why:** The field was removed/renamed in v26. Passing it causes a schema validation error: "Invalid configuration object — configuration.win should be one of these: null". Use `signtoolOptions` for signing algorithm config in v26.
+
+**How to apply:** Remove `signingHashAlgorithms` from the `win` config block in `electron-builder.config.js`. If you need SHA256, check `signtoolOptions` docs.
