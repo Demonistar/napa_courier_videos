@@ -52,15 +52,19 @@ jobs:
       # ── 4. Install dependencies ───────────────────────────────────────────────
       #
       # electron-app has its own package-lock.json (npm, not pnpm) that was
-      # generated outside the pnpm workspace.  Use `npm ci --ignore-scripts` so
-      # npm resolves platform-specific optional native binaries (e.g.
-      # @rollup/rollup-win32-x64-msvc for electron-vite) for the current runner
-      # OS.  pnpm-lock.yaml is generated on Linux and marks win32 optional
-      # packages as excluded ("-"); using pnpm install here would skip them and
-      # cause a "Cannot find module @rollup/rollup-win32-x64-msvc" build failure.
+      # generated outside the pnpm workspace.  Use plain `npm ci` so:
+      #   • npm correctly installs platform-specific optional native binaries
+      #     (e.g. @rollup/rollup-win32-x64-msvc for electron-vite) on the
+      #     Windows runner — pnpm-lock.yaml was generated on Linux and marks
+      #     win32 optional packages as excluded ("-"); using pnpm here would skip
+      #     them and cause a "Cannot find module @rollup/rollup-win32-x64-msvc"
+      #     build failure.
+      #   • Electron's postinstall script runs and downloads the Electron binary
+      #     into node_modules/electron/dist/; without it electron-builder has no
+      #     runtime to package.  (Do NOT add --ignore-scripts.)
       - name: Install dependencies
         working-directory: electron-app
-        run: npm ci --ignore-scripts
+        run: npm ci
 
       # ── 5. Stamp version from release tag ────────────────────────────────────
       #
