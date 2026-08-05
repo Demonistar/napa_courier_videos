@@ -59,6 +59,12 @@ declare global {
         get(): Promise<AppSettings>;
         set(updates: Partial<AppSettings>): Promise<void>;
       };
+      menu: {
+        /** Subscribe to File → Save. Returns a cleanup function to remove the listener. */
+        onManualSave(callback: () => void): () => void;
+        /** Subscribe to File → Backup Now. Returns a cleanup function to remove the listener. */
+        onManualBackup(callback: () => void): () => void;
+      };
     };
   }
 }
