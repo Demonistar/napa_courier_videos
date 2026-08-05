@@ -78,20 +78,23 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-# ── 6. Build and package (no upload yet) ─────────────────────────────────
+      # ── 6. Build and package (no upload yet) ─────────────────────────────────
       #
       # Builds both DMG files (Intel x64 + Apple Silicon arm64). No Apple
-      # Developer Program certificate has been set up for this project, so
-      # CSC_LINK/CSC_KEY_PASSWORD are intentionally left unset — electron-builder
-      # produces an unsigned build in that case rather than failing. Unsigned
-      # installers trigger a one-time "unidentified developer" warning on first
-      # open (right-click → Open bypasses it), acceptable for internal tools.
-      # `--publish never` withholds the upload until after the check below.
+      # Developer Program certificate has been set up for this project.
+      # CSC_IDENTITY_AUTO_DISCOVERY=false explicitly tells electron-builder to
+      # skip signing entirely rather than searching the runner's keychain for
+      # something to sign with (which is what it does by default on macOS even
+      # with CSC_LINK/CSC_KEY_PASSWORD unset, causing a confusing failure).
+      # Unsigned installers trigger a one-time "unidentified developer" warning
+      # on first open (right-click → Open bypasses it), acceptable for internal
+      # tools. `--publish never` withholds the upload until after the check below.
       - name: Build and package
         working-directory: electron-app
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
         run: npm run build && npx electron-builder --mac --publish never --config electron-builder.config.js
 
