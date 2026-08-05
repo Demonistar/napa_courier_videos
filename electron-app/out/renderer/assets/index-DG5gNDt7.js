@@ -23217,6 +23217,55 @@ function useLocationStore() {
     setHasConflict(false);
     setConflictMessage(null);
   }, [appState, loadFromDropbox]);
+  const manualSave = reactExports.useCallback(async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      pendingSaveRef.current = null;
+    }
+    setIsSaving(true);
+    try {
+      const payload = {
+        version: 1,
+        locations: appState.locations,
+        auditLog: appState.auditLog,
+        currentUser: appState.currentUser
+      };
+      const result = await window.electronAPI.data.saveStaging(payload, stagingRevRef.current);
+      if (result.ok && result.newRev) {
+        stagingRevRef.current = result.newRev;
+        setHasConflict(false);
+        setSaveError(null);
+      } else if (result.conflict) {
+        setHasConflict(true);
+        setConflictMessage(result.error ?? "Another admin saved changes since you loaded.");
+      } else if (!result.ok) {
+        setSaveError(result.error ?? "Failed to save to Dropbox.");
+      }
+      return result;
+    } catch (err) {
+      const msg = err.message;
+      setSaveError(msg);
+      return { ok: false, error: msg };
+    } finally {
+      setIsSaving(false);
+    }
+  }, [appState]);
+  const manualBackup = reactExports.useCallback(async () => {
+    try {
+      const entry = {
+        id: crypto.randomUUID(),
+        label: "Manual backup",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        locationId: null,
+        locationName: null,
+        snapshot: { locations: appState.locations, auditLog: appState.auditLog }
+      };
+      return await window.electronAPI.data.saveBackup(entry);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }, [appState]);
   const getAuditHistory = reactExports.useCallback(
     (locationId, limit = 5) => appState.auditLog.filter((e) => e.locationId === locationId).sort((a2, b2) => new Date(b2.changedAt).getTime() - new Date(a2.changedAt).getTime()).slice(0, limit),
     [appState.auditLog]
@@ -23290,7 +23339,9 @@ function useLocationStore() {
     restoreBackup,
     restoreSingleLocation,
     reload: loadFromDropbox,
-    resolveConflict
+    resolveConflict,
+    manualSave,
+    manualBackup
   };
 }
 const Input = reactExports.forwardRef(
@@ -30452,7 +30503,8 @@ function SettingsPanel({
                 value: folderPath,
                 onChange: (e) => handleFolderPathChange(e.target.value),
                 placeholder: "/NAPA Courier Admin",
-                className: "font-mono text-sm"
+                className: "font-mono text-sm",
+                disabled: folderValidating
               }
             ),
             /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -75650,7 +75702,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-BqYnDO8n.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-DbJ8JL0H.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -76582,7 +76634,9 @@ function AdminDashboard({ onLogout, initialUser }) {
     getBackups,
     restoreBackup,
     restoreSingleLocation,
-    resolveConflict
+    resolveConflict,
+    manualSave,
+    manualBackup
   } = useLocationStore();
   const { user: dropboxUser, disconnect: dropboxDisconnect, refresh: dropboxRefresh } = useDropboxUser();
   const { toast: toast2 } = useToast();
@@ -76603,6 +76657,28 @@ function AdminDashboard({ onLogout, initialUser }) {
       toast2({ title: "Data recovered", description: recoveryNotice });
     }
   }, [recoveryNotice]);
+  reactExports.useEffect(() => {
+    const cleanup = window.electronAPI.menu.onManualSave(async () => {
+      const result = await manualSave();
+      if (result.ok) {
+        toast2({ title: "Saved", description: "Staging changes saved to Dropbox." });
+      } else if (!result.conflict) {
+        toast2({ title: "Save failed", description: result.error ?? "Could not write to Dropbox.", variant: "destructive" });
+      }
+    });
+    return cleanup;
+  }, [manualSave]);
+  reactExports.useEffect(() => {
+    const cleanup = window.electronAPI.menu.onManualBackup(async () => {
+      const result = await manualBackup();
+      if (result.ok) {
+        toast2({ title: "Backup created", description: "Full snapshot saved to Dropbox." });
+      } else {
+        toast2({ title: "Backup failed", description: result.error ?? "Could not write backup to Dropbox.", variant: "destructive" });
+      }
+    });
+    return cleanup;
+  }, [manualBackup]);
   const [searchQuery, setSearchQuery] = reactExports.useState("");
   const [selectedLocationId, setSelectedLocationId] = reactExports.useState(null);
   const [viewMode, setViewMode] = reactExports.useState("default");

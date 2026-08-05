@@ -170,6 +170,20 @@ const api = {
       error?: string;
     }> => ipcRenderer.invoke('dropbox:downloadImage', relativePath),
   },
+  menu: {
+    /** Fired when the user clicks File → Save. Returns a cleanup fn. */
+    onManualSave: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('menu:manualSave', handler);
+      return () => ipcRenderer.removeListener('menu:manualSave', handler);
+    },
+    /** Fired when the user clicks File → Backup Now. Returns a cleanup fn. */
+    onManualBackup: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('menu:manualBackup', handler);
+      return () => ipcRenderer.removeListener('menu:manualBackup', handler);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

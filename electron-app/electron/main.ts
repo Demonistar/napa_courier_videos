@@ -1176,6 +1176,16 @@ function buildAppMenu(win: BrowserWindow): void {
     {
       label: 'File',
       submenu: [
+        {
+          label: 'Save',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => win.webContents.send('menu:manualSave'),
+        },
+        {
+          label: 'Backup Now',
+          click: () => win.webContents.send('menu:manualBackup'),
+        },
+        { type: 'separator' as const },
         isMac ? { role: 'close' as const } : { role: 'quit' as const },
       ],
     },

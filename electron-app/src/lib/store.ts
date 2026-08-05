@@ -453,6 +453,62 @@ export function useLocationStore() {
     setConflictMessage(null);
   }, [appState, loadFromDropbox]);
 
+  // ── Manual File menu actions ──────────────────────────────────────────────
+
+  /** Immediately saves staging to Dropbox — same rev-safe path as the auto-save. */
+  const manualSave = useCallback(async (): Promise<{ ok: boolean; conflict?: boolean; error?: string }> => {
+    // Flush any pending debounce — we're saving right now
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      pendingSaveRef.current = null;
+    }
+    setIsSaving(true);
+    try {
+      const payload: StagingPayload = {
+        version: 1,
+        locations: appState.locations,
+        auditLog: appState.auditLog,
+        currentUser: appState.currentUser,
+      };
+      const result = await window.electronAPI.data.saveStaging(payload, stagingRevRef.current);
+      if (result.ok && result.newRev) {
+        stagingRevRef.current = result.newRev;
+        setHasConflict(false);
+        setSaveError(null);
+      } else if (result.conflict) {
+        setHasConflict(true);
+        setConflictMessage(result.error ?? 'Another admin saved changes since you loaded.');
+      } else if (!result.ok) {
+        setSaveError(result.error ?? 'Failed to save to Dropbox.');
+      }
+      return result;
+    } catch (err) {
+      const msg = (err as Error).message;
+      setSaveError(msg);
+      return { ok: false, error: msg };
+    } finally {
+      setIsSaving(false);
+    }
+  }, [appState]);
+
+  /** Creates a full-snapshot backup of the current staging state. */
+  const manualBackup = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const entry = {
+        id: crypto.randomUUID(),
+        label: 'Manual backup',
+        timestamp: new Date().toISOString(),
+        locationId: null as string | null,
+        locationName: null as string | null,
+        snapshot: { locations: appState.locations, auditLog: appState.auditLog },
+      };
+      return await window.electronAPI.data.saveBackup(entry);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }, [appState]);
+
   // ── Audit history ─────────────────────────────────────────────────────────
 
   const getAuditHistory = useCallback(
@@ -534,6 +590,8 @@ export function useLocationStore() {
 
     reload: loadFromDropbox,
     resolveConflict,
+    manualSave,
+    manualBackup,
   };
 }
 

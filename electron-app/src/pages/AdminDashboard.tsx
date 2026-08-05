@@ -65,6 +65,8 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     restoreBackup,
     restoreSingleLocation,
     resolveConflict,
+    manualSave,
+    manualBackup,
     reload,
   } = useLocationStore();
 
@@ -93,6 +95,33 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
       toast({ title: 'Data recovered', description: recoveryNotice });
     }
   }, [recoveryNotice]);
+
+  // File menu → Save (Ctrl/Cmd+S)
+  useEffect(() => {
+    const cleanup = window.electronAPI.menu.onManualSave(async () => {
+      const result = await manualSave();
+      if (result.ok) {
+        toast({ title: 'Saved', description: 'Staging changes saved to Dropbox.' });
+      } else if (!result.conflict) {
+        // Conflicts surface via the existing conflict dialog — no extra toast needed
+        toast({ title: 'Save failed', description: result.error ?? 'Could not write to Dropbox.', variant: 'destructive' });
+      }
+    });
+    return cleanup;
+  }, [manualSave]);
+
+  // File menu → Backup Now
+  useEffect(() => {
+    const cleanup = window.electronAPI.menu.onManualBackup(async () => {
+      const result = await manualBackup();
+      if (result.ok) {
+        toast({ title: 'Backup created', description: 'Full snapshot saved to Dropbox.' });
+      } else {
+        toast({ title: 'Backup failed', description: result.error ?? 'Could not write backup to Dropbox.', variant: 'destructive' });
+      }
+    });
+    return cleanup;
+  }, [manualBackup]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);

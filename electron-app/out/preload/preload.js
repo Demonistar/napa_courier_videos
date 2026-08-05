@@ -76,6 +76,20 @@ const api = {
      * a base64 data URI for display in an <img> tag.
      */
     downloadImage: (relativePath) => electron.ipcRenderer.invoke("dropbox:downloadImage", relativePath)
+  },
+  menu: {
+    /** Fired when the user clicks File → Save. Returns a cleanup fn. */
+    onManualSave: (callback) => {
+      const handler = () => callback();
+      electron.ipcRenderer.on("menu:manualSave", handler);
+      return () => electron.ipcRenderer.removeListener("menu:manualSave", handler);
+    },
+    /** Fired when the user clicks File → Backup Now. Returns a cleanup fn. */
+    onManualBackup: (callback) => {
+      const handler = () => callback();
+      electron.ipcRenderer.on("menu:manualBackup", handler);
+      return () => electron.ipcRenderer.removeListener("menu:manualBackup", handler);
+    }
   }
 };
 electron.contextBridge.exposeInMainWorld("electronAPI", api);
