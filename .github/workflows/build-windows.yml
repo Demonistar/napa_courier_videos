@@ -18,16 +18,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
+      # ── 2. Node.js ───────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       # ── 3. Lockfile sanity check ──────────────────────────────────────────────
       #
@@ -56,28 +51,22 @@ jobs:
 
       # ── 4. Install dependencies ───────────────────────────────────────────────
       #
-      # Do NOT use --frozen-lockfile here.  The pnpm-lock.yaml is generated on
-      # Linux and marks Windows-specific optional native binaries (e.g.
-      # @rollup/rollup-win32-x64-msvc) as "-" (excluded).  With
-      # --frozen-lockfile, pnpm honours those exclusions on the Windows runner,
-      # causing a "Cannot find module @rollup/rollup-win32-x64-msvc" failure
-      # inside electron-vite build.
-      #
-      # Without --frozen-lockfile, pnpm still uses the lockfile for all
-      # non-optional packages (fully deterministic) but correctly resolves
-      # platform-specific optional native binaries for the current runner OS.
-      # Install from the workspace root so pnpm resolves catalog: specifiers.
+      # electron-app has its own package-lock.json (npm, not pnpm) that was
+      # generated outside the pnpm workspace.  Use `npm ci --ignore-scripts` so
+      # npm resolves platform-specific optional native binaries (e.g.
+      # @rollup/rollup-win32-x64-msvc for electron-vite) for the current runner
+      # OS.  pnpm-lock.yaml is generated on Linux and marks win32 optional
+      # packages as excluded ("-"); using pnpm install here would skip them and
+      # cause a "Cannot find module @rollup/rollup-win32-x64-msvc" build failure.
       - name: Install dependencies
-        run: pnpm install
+        working-directory: electron-app
+        run: npm ci --ignore-scripts
 
-      # ── 4. Stamp version from release tag ────────────────────────────────────
+      # ── 5. Stamp version from release tag ────────────────────────────────────
       #
       # Strips the leading "v" from the tag (e.g. v1.2.0 → 1.2.0) and writes it
       # into electron-app/package.json so electron-builder picks it up for the
       # installer filename and About screen.
-      #
-      # Uses a Node script instead of `npm version` because the package.json
-      # contains pnpm catalog: specifiers that npm does not understand.
       #
       # The tag is passed through an env variable rather than inline shell
       # interpolation to prevent workflow-command injection from crafted tag names.
@@ -106,7 +95,7 @@ jobs:
           fi
           echo "✓ package.json version set to $VERSION"
 
-      # ── 5. Copy shared components from the web app source ────────────────────
+      # ── 6. Copy shared components from the web app source ────────────────────
       #
       # setup-components.sh copies shadcn/ui primitives, tree, form, and other
       # shared code from artifacts/napa-courier-admin/src/ into electron-app/src/.
@@ -116,7 +105,7 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build and package (without publishing yet) ────────────────────────
+      # ── 7. Build and package (without publishing yet) ────────────────────────
       #
       # We intentionally separate build from publish so the signature
       # verification step (below) can fail the workflow before any unsigned
@@ -134,9 +123,9 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: pnpm run build && electron-builder --win --publish never
+        run: npm run build && npx electron-builder --win --publish never
 
-      # ── 7. Verify Authenticode signature ─────────────────────────────────────
+      # ── 8. Verify Authenticode signature ─────────────────────────────────────
       #
       # When WIN_CSC_LINK is set, `signtool verify /pa` checks that the
       # installer carries a valid Authenticode signature.  It exits non-zero
@@ -200,7 +189,7 @@ jobs:
             Write-Host "Signature OK — proceeding to publish."
           }
 
-      # ── 8. Publish to GitHub Releases ────────────────────────────────────────
+      # ── 9. Publish to GitHub Releases ────────────────────────────────────────
       #
       # Only reached when the signature check above passes.
       # Uploads exactly the verified installer (.exe), the electron-updater
