@@ -9,9 +9,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { SettingsPanel } from './SettingsPanel';
 import type { DropboxUserInfo } from '@/hooks/use-dropbox-user';
+import type { DetectedFolder } from './DropboxFolderBrowser';
 
 // ─── window stubs ─────────────────────────────────────────────────────────────
 
@@ -45,6 +46,37 @@ function stubElectronAPI(quitAndInstall = vi.fn()) {
     },
   });
   return { quitAndInstall };
+}
+
+/**
+ * Stub for mismatch-dialog tests.  Includes the `dropbox` namespace so the
+ * auto-detection useEffect resolves to the supplied detected folders.
+ */
+function stubElectronAPIWithDropbox({
+  detectedFolders = [] as DetectedFolder[],
+  settingsSet = vi.fn().mockResolvedValue(undefined),
+  initialFolderPath = '',
+} = {}) {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    writable: true,
+    value: {
+      app: {
+        getVersion: vi.fn().mockResolvedValue('1.0.0'),
+        getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
+        quitAndInstall: vi.fn(),
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({ dropboxFolderPath: initialFolderPath, theme: 'light' }),
+        set: settingsSet,
+      },
+      dropbox: {
+        findNapaAdminFolders: vi.fn().mockResolvedValue({ ok: true, folders: detectedFolders }),
+        testFolderPath: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    },
+  });
+  return { settingsSet };
 }
 
 // ─── Prop helpers ─────────────────────────────────────────────────────────────
@@ -270,5 +302,149 @@ describe('SettingsPanel — download progress bar', () => {
 
     expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument();
+  });
+});
+
+// ─── Mismatch confirmation dialog ─────────────────────────────────────────────
+
+/**
+ * These tests cover the guard in `saveFolderPath`: when the typed folder path
+ * doesn't match the parent of any auto-detected "NAPA Admin Data" folder, an
+ * AlertDialog must appear asking the admin to confirm before saving.
+ */
+describe('SettingsPanel — mismatch confirmation dialog', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A single detected folder whose parent is /napa couriers. */
+  const detectedFolders: DetectedFolder[] = [
+    {
+      name: 'NAPA Admin Data',
+      pathDisplay: '/NAPA Couriers/NAPA Admin Data',
+      pathLower: '/napa couriers/napa admin data',
+    },
+  ];
+
+  const connectedDropboxUser: DropboxUserInfo = {
+    connected: true,
+    name: 'Test Admin',
+    email: 'admin@example.com',
+  };
+
+  it('opens the mismatch dialog when the typed path does not match any detected parent', async () => {
+    stubElectronAPIWithDropbox({ detectedFolders });
+
+    render(
+      <SettingsPanel
+        {...defaultProps({ dropboxUser: connectedDropboxUser })}
+      />,
+    );
+
+    // Wait for auto-detection to resolve and populate detectedFolders.
+    await waitFor(() =>
+      expect(screen.getByText(/existing shared data folder found/i)).toBeInTheDocument(),
+    );
+
+    // Type a path that does NOT match /napa couriers.
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Some Other Folder' } });
+
+    // Click the Save button (first one in the folder-path row).
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // The mismatch AlertDialog should now be open.
+    expect(await screen.findByText(/use a different folder\?/i)).toBeInTheDocument();
+  });
+
+  it('does not open the mismatch dialog when the typed path matches the detected parent', async () => {
+    const { settingsSet } = stubElectronAPIWithDropbox({ detectedFolders });
+
+    render(
+      <SettingsPanel
+        {...defaultProps({ dropboxUser: connectedDropboxUser })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/existing shared data folder found/i)).toBeInTheDocument(),
+    );
+
+    // Type the correct parent path (case-insensitive comparison is used internally).
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/NAPA Couriers' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // Dialog must NOT appear.
+    expect(screen.queryByText(/use a different folder\?/i)).not.toBeInTheDocument();
+
+    // settings.set must have been called immediately (no confirmation needed).
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ dropboxFolderPath: '/NAPA Couriers' });
+  });
+
+  it('calls settings.set with the mismatched path when "Save anyway" is clicked', async () => {
+    const { settingsSet } = stubElectronAPIWithDropbox({ detectedFolders });
+
+    render(
+      <SettingsPanel
+        {...defaultProps({ dropboxUser: connectedDropboxUser })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/existing shared data folder found/i)).toBeInTheDocument(),
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Wrong Folder' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // Wait for the dialog to appear.
+    const saveAnywayButton = await screen.findByRole('button', { name: /save anyway/i });
+
+    // settings.set must NOT have been called yet.
+    expect(settingsSet).not.toHaveBeenCalled();
+
+    fireEvent.click(saveAnywayButton);
+
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ dropboxFolderPath: '/Wrong Folder' });
+  });
+
+  it('does not call settings.set when "Go back" is clicked in the mismatch dialog', async () => {
+    const { settingsSet } = stubElectronAPIWithDropbox({ detectedFolders });
+
+    render(
+      <SettingsPanel
+        {...defaultProps({ dropboxUser: connectedDropboxUser })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/existing shared data folder found/i)).toBeInTheDocument(),
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Wrong Folder' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    const goBackButton = await screen.findByRole('button', { name: /go back/i });
+    fireEvent.click(goBackButton);
+
+    // settings.set must not have been called.
+    expect(settingsSet).not.toHaveBeenCalled();
+
+    // Dialog should close.
+    await waitFor(() =>
+      expect(screen.queryByText(/use a different folder\?/i)).not.toBeInTheDocument(),
+    );
   });
 });
