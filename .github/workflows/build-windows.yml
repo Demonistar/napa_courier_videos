@@ -29,7 +29,32 @@ jobs:
         with:
           version: 10
 
-      # ── 3. Install dependencies ───────────────────────────────────────────────
+      # ── 3. Lockfile sanity check ──────────────────────────────────────────────
+      #
+      # electron-app/package-lock.json must be generated OUTSIDE the pnpm
+      # workspace (no parent node_modules/.pnpm store).  If it contains
+      # resolved paths pointing at the pnpm store it was regenerated from inside
+      # the repo — npm ci will then resolve ~45 packages instead of ~522 and
+      # electron-vite will be missing from PATH, causing a cryptic build failure.
+      #
+      # Use scripts/regen-lockfile.sh (or a Windows machine) to regenerate it
+      # safely.  See electron-app/README.md "Rebuilding" section for details.
+      - name: Check lockfile is pnpm-store-free
+        shell: bash
+        run: |
+          count=$(grep -c 'node_modules/.pnpm' electron-app/package-lock.json || true)
+          if [ "$count" -gt 0 ]; then
+            echo "ERROR: electron-app/package-lock.json contains $count reference(s) to" >&2
+            echo "  node_modules/.pnpm — it was regenerated from inside the pnpm workspace." >&2
+            echo "" >&2
+            echo "Run scripts/regen-lockfile.sh from the repo root to regenerate it safely," >&2
+            echo "or run 'npm install --ignore-scripts' inside a clean temp directory." >&2
+            echo "See electron-app/README.md (Rebuilding section) for full instructions." >&2
+            exit 1
+          fi
+          echo "✓ package-lock.json is clean (no pnpm store references)"
+
+      # ── 4. Install dependencies ───────────────────────────────────────────────
       #
       # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
       # Install from the workspace root so pnpm resolves catalog: specifiers.

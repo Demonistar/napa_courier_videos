@@ -616,6 +616,56 @@ When the web app source (`artifacts/napa-courier-admin/src/`) is updated with ne
 
 ---
 
+### ⚠️ Regenerating `package-lock.json` — read this before running `npm install`
+
+**Never run `npm install` (or `npm install --package-lock-only`) inside the
+`electron-app/` directory while it sits inside the pnpm workspace.**
+
+When you run `npm install` from inside the repo, npm sees the parent
+`node_modules/.pnpm` store and writes resolved URLs like
+`file:../../../node_modules/.pnpm/...` into `package-lock.json`. Those paths
+only exist on your machine. In CI (`npm ci` on a fresh Windows runner) npm
+resolves only ~45 packages instead of ~522, `electron-vite` ends up missing
+from `PATH`, and the build fails with a cryptic "not recognised" error.
+
+**Safe way — use the helper script (macOS/Linux/WSL):**
+
+```bash
+# Run from the repository root
+bash scripts/regen-lockfile.sh
+```
+
+The script copies `electron-app/package.json` to a clean `/tmp` directory
+outside the pnpm workspace, runs `npm install --ignore-scripts` there (so npm
+sees no parent store), verifies the result with `npm ci --ignore-scripts`, and
+copies the generated `package-lock.json` back into `electron-app/`.
+
+**Safe way — Windows machine (no WSL):**
+
+On a Windows machine that does **not** have the pnpm workspace checked out,
+run inside a clean directory:
+
+```cmd
+mkdir C:\tmp\lockgen
+copy electron-app\package.json C:\tmp\lockgen\
+cd C:\tmp\lockgen
+npm install --ignore-scripts
+copy package-lock.json <repo>\electron-app\package-lock.json
+```
+
+**Verify before committing:**
+
+```bash
+grep -c 'node_modules/.pnpm' electron-app/package-lock.json
+```
+
+The count must be **0**. A non-zero count means the lockfile was generated from
+inside the workspace and will break the Windows CI build. The CI workflow also
+runs this check automatically and will fail if any pnpm store references are
+found.
+
+---
+
 ## Manual Component Copy (if bash isn't available)
 
 If `setup-components.sh` won't run, copy these folders manually from
