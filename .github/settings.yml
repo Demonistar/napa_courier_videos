@@ -36,12 +36,9 @@ branches:
       # match, leaving the required context "pending" forever and blocking
       # every unrelated PR.
       #
-      # test-windows-signing-gate.yml runs on all PRs and detects relevant
-      # changes internally — it is safe to require here.
-      #
-      # test-macos-signing-gate.yml and test-linux-build-gate.yml still use
-      # `pull_request.paths` filters and must NOT be listed until they are
-      # updated to use the same always-run + internal-detection pattern.
+      # All three gate workflows run on all PRs and detect relevant changes
+      # internally — they exit early with success when no installer-affecting
+      # files are touched, so they are safe to require here.
       required_status_checks:
         strict: false        # Do not require the branch to be up-to-date
         contexts:
@@ -51,6 +48,20 @@ branches:
           # are touched.  Fails if the signtool gate in build-windows.yml
           # stops rejecting unsigned installers.
           - "Verify signtool gate rejects an unsigned installer"
+
+          # macOS signing gate — .github/workflows/test-macos-signing-gate.yml
+          # Runs on every PR; exits early with success when no installer-
+          # affecting files (build-macos.yml, electron-builder.config.js)
+          # are touched.  Fails if the codesign gate in build-macos.yml
+          # stops rejecting unsigned .app bundles.
+          - "Verify codesign gate rejects an unsigned build"
+
+          # Linux build gate — .github/workflows/test-linux-build-gate.yml
+          # Runs on every PR; exits early with success when no installer-
+          # affecting files (electron-app/**, build-linux.yml) are touched.
+          # Fails if the linux section of electron-builder.config.js is
+          # misconfigured and the AppImage or .deb is not produced.
+          - "Verify Linux installers build (AppImage + deb)"
 
       # ── Other protection settings ──────────────────────────────────────────
       enforce_admins: false      # Allow admins to bypass in emergencies

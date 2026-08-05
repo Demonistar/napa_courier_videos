@@ -50,6 +50,10 @@ echo ""
 # filter does not match, which leaves the required context "pending" forever
 # and permanently blocks unrelated PRs from merging.
 #
+# All three gate workflows below run on every PR with internal change
+# detection — they exit early with success when no installer-affecting files
+# are touched, so they are safe to require here.
+#
 # Contexts added here:
 #
 #   "Verify signtool gate rejects an unsigned installer"
@@ -59,9 +63,19 @@ echo ""
 #     Fails if the signtool gate in build-windows.yml stops rejecting
 #     unsigned .exe files before they reach GitHub Releases.
 #
-# NOT listed (still use pull_request.paths — would block unrelated PRs):
-#   "Verify codesign gate rejects an unsigned build"   (test-macos-signing-gate.yml)
-#   "Verify Linux build produces AppImage + deb"       (test-linux-build-gate.yml)
+#   "Verify codesign gate rejects an unsigned build"
+#     Job in .github/workflows/test-macos-signing-gate.yml.
+#     Runs on every PR — no paths filter.  Detects installer-affecting
+#     changes internally and exits early with success when none are found.
+#     Fails if the codesign gate in build-macos.yml stops rejecting
+#     unsigned .app bundles before they reach GitHub Releases.
+#
+#   "Verify Linux installers build (AppImage + deb)"
+#     Job in .github/workflows/test-linux-build-gate.yml.
+#     Runs on every PR — no paths filter.  Detects installer-affecting
+#     changes internally and exits early with success when none are found.
+#     Fails if the linux section in electron-builder.config.js is
+#     misconfigured and the expected output files are not produced.
 #
 gh api \
   --method PUT \
@@ -73,7 +87,9 @@ gh api \
   "required_status_checks": {
     "strict": false,
     "contexts": [
-      "Verify signtool gate rejects an unsigned installer"
+      "Verify signtool gate rejects an unsigned installer",
+      "Verify codesign gate rejects an unsigned build",
+      "Verify Linux installers build (AppImage + deb)"
     ]
   },
   "enforce_admins": false,
@@ -91,7 +107,9 @@ echo "✅ Branch protection applied to ${REPO}/${BRANCH}."
 echo ""
 echo "Required status checks now enforced:"
 echo "  • Verify signtool gate rejects an unsigned installer"
+echo "  • Verify codesign gate rejects an unsigned build"
+echo "  • Verify Linux installers build (AppImage + deb)"
 echo ""
-echo "A PR that breaks the Windows signing gate cannot be merged until"
-echo "the check passes.  PRs that do not touch build-windows.yml or"
-echo "electron-builder.config.js exit the gate immediately with success."
+echo "A PR that breaks any signing or build gate cannot be merged until"
+echo "the check passes.  PRs that do not touch installer-affecting files"
+echo "exit each gate immediately with success."

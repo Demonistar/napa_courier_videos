@@ -1,12 +1,22 @@
 name: Test macOS signing gate
 
-# Triggered on demand to confirm the "Verify code signature" step in
-# build-macos.yml correctly blocks unsigned builds from reaching admins.
+# Triggered on every pull request (no `paths:` filter) and on demand.
 #
-# The test runs on a real macos-latest runner so the native `codesign` tool
-# is available.  It builds two synthetic unsigned .app bundles (one per
-# architecture output directory that build-macos.yml expects) and then feeds
-# them through the EXACT same gate script used in build-macos.yml step 7.
+# WHY NO PATHS FILTER
+# GitHub does not create a check-run when a workflow is skipped by a
+# `pull_request.paths` filter.  A required-status check whose context never
+# appears stays permanently "pending", which blocks every unrelated PR forever.
+# Instead, this workflow runs on all pull requests and detects relevant changes
+# in its first step; when no installer-affecting files changed it exits
+# immediately with success so the required check is satisfied without spinning
+# up the macos-latest runner for an expensive build.
+#
+# WHAT IT TESTS
+# When a PR touches build-macos.yml or electron-app/electron-builder.config.js
+# the workflow runs on a real macos-latest runner (so the native `codesign`
+# tool is available), builds two synthetic unsigned .app bundles (one per
+# architecture output directory that build-macos.yml expects), and feeds them
+# through the EXACT same gate script used in build-macos.yml step 7.
 #
 # Expected result: the gate script exits non-zero and the "Confirm gate
 # blocked upload" step reports a clear pass.  If codesign somehow passed on
@@ -17,9 +27,8 @@ name: Test macOS signing gate
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/build-macos.yml"
-      - "electron-app/electron-builder.config.js"
+    # No paths: filter — see note above.  Internal change detection below
+    # short-circuits the job when no installer-affecting files are touched.
 
 jobs:
   signing-gate-test:
@@ -27,11 +36,68 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      # ── 1. Checkout (needed so the runner has the repo layout) ───────────────
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      #
+      # fetch-depth: 0 ensures the base commit is available so git diff can
+      # compare the PR head against its merge base.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # ── 2. Build minimal unsigned .app bundles ───────────────────────────────
+      # ── 2. Detect installer-affecting changes ─────────────────────────────
+      #
+      # Sets output `run_gate` to "true" when the PR touches files that affect
+      # the macOS installer build or signing gate, and to "false" otherwise.
+      #
+      # For workflow_dispatch (manual runs) the gate always runs so developers
+      # can verify the gate on demand without touching any files.
+      #
+      # Files that trigger the gate:
+      #   .github/workflows/build-macos.yml        — the release build workflow
+      #   electron-app/electron-builder.config.js  — packager + signing config
+      - name: Detect installer-affecting changes
+        id: changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger — running signing gate unconditionally."
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD")
+
+          echo "Files changed in this PR:"
+          echo "$CHANGED"
+          echo ""
+
+          RELEVANT_PATTERN='^(\.github/workflows/build-macos\.yml|electron-app/electron-builder\.config\.js)$'
+          if echo "$CHANGED" | grep -qE "$RELEVANT_PATTERN"; then
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "Installer-affecting files changed — signing gate will run."
+          else
+            echo "run_gate=false" >> "$GITHUB_OUTPUT"
+            echo "No installer-affecting files changed — skipping gate (pass)."
+          fi
+
+      # ── 3. Short-circuit when no relevant files changed ───────────────────
+      #
+      # Reports a clear skip message and exits 0 so the required-check context
+      # is satisfied without running the remaining macos-latest steps.
+      - name: Skip gate (no installer-affecting changes)
+        if: steps.changes.outputs.run_gate == 'false'
+        shell: bash
+        run: |
+          echo "✅ SKIP — no changes to build-macos.yml or"
+          echo "   electron-builder.config.js in this PR."
+          echo ""
+          echo "The macOS signing gate is not relevant to these changes."
+          echo "Required check satisfied."
+
+      # ── 4. Build minimal unsigned .app bundles ───────────────────────────────
       #
       # Creates the smallest valid macOS application bundle structure that
       # codesign will accept as input but will refuse to verify as signed.
@@ -41,6 +107,7 @@ jobs:
       #   electron-app/dist-installer/mac/<AppName>.app/
       #   electron-app/dist-installer/mac-arm64/<AppName>.app/
       - name: Create unsigned .app bundles
+        if: steps.changes.outputs.run_gate == 'true'
         working-directory: electron-app
         run: |
           APP_NAME="NAPA Courier Admin.app"
@@ -75,13 +142,14 @@ jobs:
             echo "Created unsigned bundle: ${APP_PATH}"
           done
 
-      # ── 3. Run the gate script — expect it to fail ───────────────────────────
+      # ── 5. Run the gate script — expect it to fail ───────────────────────────
       #
       # This reproduces build-macos.yml step 7 verbatim.  Running it with
       # `continue-on-error: true` lets us capture the exit code and assert it
       # is non-zero.  A non-zero exit here means the gate works as intended.
       - name: Run gate script (expect failure)
         id: gate
+        if: steps.changes.outputs.run_gate == 'true'
         working-directory: electron-app
         continue-on-error: true
         run: |
@@ -97,12 +165,13 @@ jobs:
             echo "✓ Signature valid: ${APP_PATH}"
           done
 
-      # ── 4. Confirm the gate blocked the upload ───────────────────────────────
+      # ── 6. Confirm the gate blocked the upload ───────────────────────────────
       #
       # The gate step MUST have exited non-zero.  If it somehow returned 0 the
       # codesign check passed on an unsigned bundle — the gate is broken and
       # this test job fails loudly.
       - name: Confirm gate blocked upload
+        if: steps.changes.outputs.run_gate == 'true'
         run: |
           OUTCOME="${{ steps.gate.outcome }}"
           echo "Gate step outcome: ${OUTCOME}"
@@ -118,7 +187,7 @@ jobs:
             exit 1
           fi
 
-      # ── 5. Confirm upload step would be skipped ──────────────────────────────
+      # ── 7. Confirm upload step would be skipped ──────────────────────────────
       #
       # In build-macos.yml the publish step is a plain sequential step — it
       # only runs when every prior step succeeds.  Because the gate (step 7)
@@ -127,6 +196,7 @@ jobs:
       #
       # This step records that guarantee explicitly in the workflow log.
       - name: Confirm upload step is unreachable after gate failure
+        if: steps.changes.outputs.run_gate == 'true'
         run: |
           echo "In build-macos.yml, step 8 (Publish to GitHub Releases) is a"
           echo "plain sequential step with no 'if:' condition."
