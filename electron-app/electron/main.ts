@@ -900,19 +900,32 @@ function registerIpcHandlers() {
    */
   ipcMain.handle('dropbox:findNapaAdminFolders', async () => {
     try {
-      const resp = await dbxApi('/files/search_v2', {
-        query: 'NAPA Admin Data',
-        options: { filename_only: true },
-      });
-      if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
       type SearchMatch = {
         metadata?: {
           '.tag'?: string;
           metadata?: { '.tag'?: string; name?: string; path_display?: string; path_lower?: string };
         };
       };
-      const data = await resp.json() as { matches?: SearchMatch[] };
-      const folders = (data.matches ?? [])
+      type SearchPage = { matches?: SearchMatch[]; has_more: boolean; cursor: string };
+
+      const resp = await dbxApi('/files/search_v2', {
+        query: 'NAPA Admin Data',
+        options: { filename_only: true },
+      });
+      if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
+
+      let page = await resp.json() as SearchPage;
+      const allMatches: SearchMatch[] = [...(page.matches ?? [])];
+
+      // Follow pagination until Dropbox signals has_more = false
+      while (page.has_more) {
+        const contResp = await dbxApi('/files/search_v2/continue', { cursor: page.cursor });
+        if (!contResp.ok) throw new Error(`Search continue failed: ${contResp.status}`);
+        page = await contResp.json() as SearchPage;
+        allMatches.push(...(page.matches ?? []));
+      }
+
+      const folders = allMatches
         .filter(m =>
           m?.metadata?.metadata?.['.tag'] === 'folder' &&
           m?.metadata?.metadata?.name?.toLowerCase() === 'napa admin data'
