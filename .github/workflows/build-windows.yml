@@ -123,7 +123,9 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: npm run build && npx electron-builder --win --publish never
+        # Pass --config explicitly: electron-builder does not always auto-discover
+        # electron-builder.config.js when invoked via npx on Windows runners.
+        run: npm run build && npx electron-builder --win --publish never --config electron-builder.config.js
 
       # ── 8. Verify Authenticode signature ─────────────────────────────────────
       #
