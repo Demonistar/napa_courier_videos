@@ -17611,12 +17611,12 @@ const createLucideIcon = (iconName, iconNode) => {
   Component.displayName = toPascalCase(iconName);
   return Component;
 };
-const __iconNode$G = [
+const __iconNode$H = [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
   ["path", { d: "m12 5 7 7-7 7", key: "xquz4c" }]
 ];
-const ArrowRight = createLucideIcon("arrow-right", __iconNode$G);
-const __iconNode$F = [
+const ArrowRight = createLucideIcon("arrow-right", __iconNode$H);
+const __iconNode$G = [
   ["path", { d: "M12 7v14", key: "1akyts" }],
   [
     "path",
@@ -17626,37 +17626,43 @@ const __iconNode$F = [
     }
   ]
 ];
-const BookOpen = createLucideIcon("book-open", __iconNode$F);
-const __iconNode$E = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
-const Check = createLucideIcon("check", __iconNode$E);
-const __iconNode$D = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
-const ChevronDown = createLucideIcon("chevron-down", __iconNode$D);
-const __iconNode$C = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
-const ChevronRight = createLucideIcon("chevron-right", __iconNode$C);
-const __iconNode$B = [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]];
-const ChevronUp = createLucideIcon("chevron-up", __iconNode$B);
-const __iconNode$A = [
+const BookOpen = createLucideIcon("book-open", __iconNode$G);
+const __iconNode$F = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
+const Check = createLucideIcon("check", __iconNode$F);
+const __iconNode$E = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
+const ChevronDown = createLucideIcon("chevron-down", __iconNode$E);
+const __iconNode$D = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
+const ChevronRight = createLucideIcon("chevron-right", __iconNode$D);
+const __iconNode$C = [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]];
+const ChevronUp = createLucideIcon("chevron-up", __iconNode$C);
+const __iconNode$B = [
   ["path", { d: "m7 15 5 5 5-5", key: "1hf1tw" }],
   ["path", { d: "m7 9 5-5 5 5", key: "sgt6xg" }]
 ];
-const ChevronsUpDown = createLucideIcon("chevrons-up-down", __iconNode$A);
-const __iconNode$z = [
+const ChevronsUpDown = createLucideIcon("chevrons-up-down", __iconNode$B);
+const __iconNode$A = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
   ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
 ];
-const CircleAlert = createLucideIcon("circle-alert", __iconNode$z);
-const __iconNode$y = [
+const CircleAlert = createLucideIcon("circle-alert", __iconNode$A);
+const __iconNode$z = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
 ];
-const CircleCheck = createLucideIcon("circle-check", __iconNode$y);
-const __iconNode$x = [
+const CircleCheck = createLucideIcon("circle-check", __iconNode$z);
+const __iconNode$y = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", key: "1u773s" }],
   ["path", { d: "M12 17h.01", key: "p32p05" }]
 ];
-const CircleQuestionMark = createLucideIcon("circle-question-mark", __iconNode$x);
+const CircleQuestionMark = createLucideIcon("circle-question-mark", __iconNode$y);
+const __iconNode$x = [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["path", { d: "m15 9-6 6", key: "1uzhvr" }],
+  ["path", { d: "m9 9 6 6", key: "z0biqf" }]
+];
+const CircleX = createLucideIcon("circle-x", __iconNode$x);
 const __iconNode$w = [["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]];
 const Circle = createLucideIcon("circle", __iconNode$w);
 const __iconNode$v = [
@@ -22957,6 +22963,7 @@ function useLocationStore() {
   const [hasConflict, setHasConflict] = reactExports.useState(false);
   const [conflictMessage, setConflictMessage] = reactExports.useState(null);
   const [saveError, setSaveError] = reactExports.useState(null);
+  const [recoveryNotice, setRecoveryNotice] = reactExports.useState(null);
   const [cachedBackups, setCachedBackups] = reactExports.useState([]);
   const stagingRevRef = reactExports.useRef("");
   const liveRevRef = reactExports.useRef("");
@@ -22981,8 +22988,16 @@ function useLocationStore() {
           liveRevRef.current = liveResult.rev ?? "";
         }
         const liveData = liveResult.ok && liveResult.data ? liveResult.data.locations ?? [] : [];
+        const stagingLocations = data.locations ?? [];
+        let effectiveLocations = stagingLocations;
+        if (stagingLocations.length === 0 && liveData.length > 0) {
+          effectiveLocations = liveData;
+          setRecoveryNotice(
+            `Staging was empty but live data was found — recovered ${liveData.length} location${liveData.length !== 1 ? "s" : ""} from the last published version.`
+          );
+        }
         setAppState({
-          locations: data.locations ?? [],
+          locations: effectiveLocations,
           publishedLocations: liveData,
           auditLog: data.auditLog ?? [],
           currentUser: data.currentUser ?? "Admin"
@@ -23261,6 +23276,7 @@ function useLocationStore() {
     hasConflict,
     conflictMessage,
     saveError,
+    recoveryNotice,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -64420,6 +64436,7 @@ function GenerateLinksDialog({
   const [scanErrors, setScanErrors] = reactExports.useState([]);
   const [activeTab, setActiveTab] = reactExports.useState("matched");
   const [appliedCount, setAppliedCount] = reactExports.useState(0);
+  const [browserOpen, setBrowserOpen] = reactExports.useState(false);
   reactExports.useEffect(() => {
     if (open2 && !folderPath) {
       window.electronAPI.settings.get().then((s2) => {
@@ -64435,6 +64452,7 @@ function GenerateLinksDialog({
       setScanErrors([]);
       setErrorMsg("");
       setActiveTab("matched");
+      setBrowserOpen(false);
     }
     onOpenChange(o2);
   };
@@ -64486,7 +64504,9 @@ function GenerateLinksDialog({
       }
       setMatched(newMatched);
       setUnmatched(newUnmatched);
-      setActiveTab(newMatched.length > 0 ? "matched" : "unmatched");
+      if (newMatched.length > 0) setActiveTab("matched");
+      else if (newUnmatched.length > 0) setActiveTab("unmatched");
+      else setActiveTab("errors");
       setStatus("review");
     } catch (err) {
       setErrorMsg(err.message);
@@ -64551,6 +64571,19 @@ function GenerateLinksDialog({
           " pattern."
         ] })
       ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        Button,
+        {
+          variant: "outline",
+          onClick: () => setBrowserOpen(true),
+          disabled: status === "loading",
+          className: "mb-6 shrink-0",
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(FolderOpen, { className: "w-4 h-4 mr-2" }),
+            "Browse"
+          ]
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         Button,
         {
@@ -64567,6 +64600,19 @@ function GenerateLinksDialog({
         }
       )
     ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      DropboxFolderBrowser,
+      {
+        open: browserOpen,
+        onOpenChange: setBrowserOpen,
+        initialPath: folderPath,
+        detectedFolders: [],
+        onSelect: (path) => {
+          setFolderPath(path);
+          setBrowserOpen(false);
+        }
+      }
+    ),
     status === "loading" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center py-16 gap-3 text-center", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "w-8 h-8 animate-spin text-primary" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium", children: "Scanning folder and generating links…" }),
@@ -64632,6 +64678,18 @@ function GenerateLinksDialog({
             children: [
               "Unmatched (",
               unmatched.length,
+              ")"
+            ]
+          }
+        ),
+        scanErrors.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            onClick: () => setActiveTab("errors"),
+            className: `px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === "errors" ? "border-destructive text-destructive" : "border-transparent text-destructive/70 hover:text-destructive"}`,
+            children: [
+              "Errors (",
+              scanErrors.length,
               ")"
             ]
           }
@@ -64726,6 +64784,16 @@ function GenerateLinksDialog({
           )
         ] }, i2))
       ] }) }) }),
+      activeTab === "errors" && /* @__PURE__ */ jsxRuntimeExports.jsx(ScrollArea, { className: "flex-1 border rounded-md", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "divide-y text-sm", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2 bg-destructive/5 text-xs font-medium text-destructive", children: "These files scanned but Dropbox refused to create or fetch a shareable link for them. Nothing was matched or applied for these — fix the underlying issue in Dropbox (permissions, file state, rate limit) and re-scan." }),
+        scanErrors.map((e, i2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-2.5 flex items-start gap-2", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(CircleX, { className: "w-4 h-4 text-destructive shrink-0 mt-0.5" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "min-w-0", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-medium truncate", children: e.name }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-destructive/90 font-mono mt-0.5 break-words", children: e.error || "Unknown error" })
+          ] })
+        ] }, i2))
+      ] }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between pt-1 shrink-0", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", size: "sm", onClick: handleExportCsv, children: [
@@ -75550,7 +75618,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-ZUmVm-XZ.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-osWWterC.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -76469,6 +76537,7 @@ function AdminDashboard({ onLogout, initialUser }) {
     hasConflict,
     conflictMessage,
     saveError,
+    recoveryNotice,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -76497,6 +76566,11 @@ function AdminDashboard({ onLogout, initialUser }) {
       toast2({ title: "Dropbox error", description: saveError, variant: "destructive" });
     }
   }, [saveError]);
+  reactExports.useEffect(() => {
+    if (recoveryNotice) {
+      toast2({ title: "Data recovered", description: recoveryNotice });
+    }
+  }, [recoveryNotice]);
   const [searchQuery, setSearchQuery] = reactExports.useState("");
   const [selectedLocationId, setSelectedLocationId] = reactExports.useState(null);
   const [viewMode, setViewMode] = reactExports.useState("default");

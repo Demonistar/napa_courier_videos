@@ -116,6 +116,8 @@ export function useLocationStore() {
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   // Hard errors from background sync or load — watched by AdminDashboard for toast
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Recovery notice when staging was empty but live data was found — non-destructive toast
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [cachedBackups, setCachedBackups] = useState<BackupEntry[]>([]);
 
   // Current Dropbox rev of locations-staging.json — used for write-safety
@@ -157,8 +159,22 @@ export function useLocationStore() {
           ? (liveResult.data as { locations?: Location[] }).locations ?? []
           : [];
 
+        const stagingLocations = data.locations ?? [];
+
+        // Recovery: if staging came back empty but live has real data, seed the
+        // in-memory state from live instead of showing a blank app. This does NOT
+        // auto-save — the recovered locations only persist to staging when the
+        // admin makes their next normal edit, via the existing debounced save path.
+        let effectiveLocations = stagingLocations;
+        if (stagingLocations.length === 0 && liveData.length > 0) {
+          effectiveLocations = liveData;
+          setRecoveryNotice(
+            `Staging was empty but live data was found — recovered ${liveData.length} location${liveData.length !== 1 ? 's' : ''} from the last published version.`,
+          );
+        }
+
         setAppState({
-          locations: data.locations ?? [],
+          locations: effectiveLocations,
           publishedLocations: liveData,
           auditLog: data.auditLog ?? [],
           currentUser: data.currentUser ?? 'Admin',
@@ -500,6 +516,7 @@ export function useLocationStore() {
     hasConflict,
     conflictMessage,
     saveError,
+    recoveryNotice,
     pendingChangesCount,
 
     addLocation,

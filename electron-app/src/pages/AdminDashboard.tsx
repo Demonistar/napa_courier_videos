@@ -51,6 +51,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     hasConflict,
     conflictMessage,
     saveError,
+    recoveryNotice,
     pendingChangesCount,
     addLocation,
     updateLocation,
@@ -85,6 +86,13 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
       toast({ title: 'Dropbox error', description: saveError, variant: 'destructive' });
     }
   }, [saveError]);
+
+  // Surface recovery notice (non-destructive) when staging was empty but live data was found
+  useEffect(() => {
+    if (recoveryNotice) {
+      toast({ title: 'Data recovered', description: recoveryNotice });
+    }
+  }, [recoveryNotice]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);

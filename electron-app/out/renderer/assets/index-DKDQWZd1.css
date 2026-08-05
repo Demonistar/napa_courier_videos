@@ -2505,6 +2505,16 @@
     color: hsl(var(--destructive-foreground));
   }
 
+  .text-destructive\/70 {
+    color: hsl(var(--destructive));
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-destructive\/70 {
+      color: color-mix(in oklab, hsl(var(--destructive)) 70%, transparent);
+    }
+  }
+
   .text-destructive\/80 {
     color: hsl(var(--destructive));
   }
@@ -2512,6 +2522,16 @@
   @supports (color: color-mix(in lab, red, red)) {
     .text-destructive\/80 {
       color: color-mix(in oklab, hsl(var(--destructive)) 80%, transparent);
+    }
+  }
+
+  .text-destructive\/90 {
+    color: hsl(var(--destructive));
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-destructive\/90 {
+      color: color-mix(in oklab, hsl(var(--destructive)) 90%, transparent);
     }
   }
 

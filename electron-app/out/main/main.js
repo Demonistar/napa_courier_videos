@@ -930,12 +930,19 @@ You can remove the app manually via Windows Settings → Apps → Installed apps
               }
             }
           }
+          const bodyText = await createResp.text().catch(() => "");
+          let reason = bodyText;
+          try {
+            const parsed = JSON.parse(bodyText);
+            reason = parsed.error_summary || parsed.error?.[".tag"] || bodyText;
+          } catch {
+          }
           return {
             name: file.name,
             path: file.path_display,
             url: "",
             reused: false,
-            error: `HTTP ${createResp.status}`
+            error: `HTTP ${createResp.status}: ${reason || "no details returned"}`
           };
         } catch (err) {
           return {
