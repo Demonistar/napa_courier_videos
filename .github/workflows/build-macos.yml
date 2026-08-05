@@ -78,56 +78,33 @@ jobs:
         working-directory: electron-app
         run: bash setup-components.sh
 
-      # ── 6. Build and package (no upload yet) ─────────────────────────────────
+# ── 6. Build and package (no upload yet) ─────────────────────────────────
       #
-      # Builds both DMG files (Intel x64 + Apple Silicon arm64) and runs the
-      # notarization afterSign hook if the APPLE_* secrets are present.
-      # `--publish never` deliberately withholds the upload so that step 7 can
-      # verify the code signature before anything reaches GitHub Releases.
-      #
-      # Code signing (prevents Gatekeeper "unverified developer" warning):
-      #   CSC_LINK          — base64-encoded Developer ID Application .p12 (repo secret)
-      #   CSC_KEY_PASSWORD  — password for the .p12 (repo secret)
-      #
-      # Notarization (optional — submits signed app to Apple for full approval):
-      # The afterSign hook (electron/notarize.cjs) is a no-op unless all three
-      # APPLE_* secrets below are set. Notarization requires signing secrets too.
-      #
-      #   APPLE_ID                    — Apple ID email (e.g. you@example.com)
-      #   APPLE_APP_SPECIFIC_PASSWORD — app-specific password from
-      #                                 appleid.apple.com → Sign-In and Security
-      #   APPLE_TEAM_ID               — 10-character Team ID from
-      #                                 developer.apple.com/account → Membership
-      #
-      # DROPBOX_APP_KEY is required for the app to connect to Dropbox at runtime.
+      # Builds both DMG files (Intel x64 + Apple Silicon arm64). No Apple
+      # Developer Program certificate has been set up for this project, so
+      # CSC_LINK/CSC_KEY_PASSWORD are intentionally left unset — electron-builder
+      # produces an unsigned build in that case rather than failing. Unsigned
+      # installers trigger a one-time "unidentified developer" warning on first
+      # open (right-click → Open bypasses it), acceptable for internal tools.
+      # `--publish never` withholds the upload until after the check below.
       - name: Build and package
         working-directory: electron-app
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
         run: npm run build && npx electron-builder --mac --publish never --config electron-builder.config.js
 
-      # ── 7. Verify code signature ──────────────────────────────────────────────
+      # ── 7. Verify code signature (only if a certificate is actually configured) ─
       #
-      # Checks that both .app bundles carry a valid Developer ID signature before
-      # any artifact is uploaded.  If CSC_LINK / CSC_KEY_PASSWORD were absent or
-      # mis-configured, electron-builder silently skips signing and exits 0; this
-      # step catches that case and fails the workflow so no unsigned installer
-      # reaches admins.
-      #
-      # `codesign` is a macOS-native tool present on every macos-latest runner —
-      # no extra installs required.
-      #
-      # electron-builder places each .app in a per-arch subdirectory of the
-      # output folder (dist-installer/):
-      #   mac/       — Intel (x64)
-      #   mac-arm64/ — Apple Silicon (arm64)
+      # If CSC_LINK is absent, this build is intentionally unsigned — skip
+      # verification and warn rather than failing the workflow. If CSC_LINK IS
+      # set but the resulting .app isn't actually signed, that's a real
+      # misconfiguration and the workflow should fail.
       - name: Verify code signature
         working-directory: electron-app
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
         run: |
           APP_NAME="NAPA Courier Admin.app"
           for APP_DIR in "dist-installer/mac" "dist-installer/mac-arm64"; do
@@ -136,9 +113,15 @@ jobs:
               echo "Error: expected .app not found at '${APP_PATH}'" >&2
               exit 1
             fi
-            echo "Verifying signature: ${APP_PATH}"
-            codesign --verify --deep --strict "${APP_PATH}"
-            echo "✓ Signature valid: ${APP_PATH}"
+            if [ -z "$CSC_LINK" ]; then
+              echo "⚠ No Apple Developer certificate configured — ${APP_PATH} is UNSIGNED."
+              echo "  Users will see an 'unidentified developer' warning on first open."
+              echo "  Right-click → Open bypasses it. Fine for internal use."
+            else
+              echo "Verifying signature: ${APP_PATH}"
+              codesign --verify --deep --strict "${APP_PATH}"
+              echo "✓ Signature valid: ${APP_PATH}"
+            fi
           done
 
       # ── 8. Publish to GitHub Releases ─────────────────────────────────────────
