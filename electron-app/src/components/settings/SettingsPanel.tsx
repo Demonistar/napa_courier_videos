@@ -109,6 +109,10 @@ export function SettingsPanel({
   // Mismatch-confirmation state
   const [mismatchConfirmOpen, setMismatchConfirmOpen] = useState(false);
 
+  // Inline path-validation error (shown below the input after Save)
+  const [folderPathError, setFolderPathError] = useState<string | null>(null);
+  const [folderValidating, setFolderValidating] = useState(false);
+
   // Prevent double-invocation of quitAndInstall if admin clicks Restart rapidly.
   const [restartingUpdate, setRestartingUpdate] = useState(false);
 
@@ -145,10 +149,11 @@ export function SettingsPanel({
       .finally(() => setDetecting(false));
   }, [open, dropboxUser.connected]);
 
-  // Reset test result whenever the admin edits the path manually.
+  // Reset test result and path error whenever the admin edits the path manually.
   const handleFolderPathChange = (value: string) => {
     setFolderPath(value);
     setFolderTestResult(null);
+    setFolderPathError(null);
   };
 
   const testFolderPath = async () => {
@@ -170,6 +175,38 @@ export function SettingsPanel({
     setTimeout(() => setFolderSaved(false), 3000);
   };
 
+  /**
+   * Validate the typed path exists in Dropbox (when connected), then commit.
+   * If the path is not found, show an inline error and abort the save.
+   * If Dropbox is not connected, skip validation and save directly.
+   */
+  const validateAndCommit = async () => {
+    setFolderPathError(null);
+
+    if (dropboxUser.connected) {
+      setFolderValidating(true);
+      try {
+        const result = await window.electronAPI.dropbox.testFolderPath(folderPath);
+        if (!result.ok) {
+          // Path not found (or Dropbox error) — surface the error inline.
+          setFolderPathError(
+            result.error?.includes('not found')
+              ? "This path was not found in your Dropbox — check for typos or use Browse"
+              : (result.error ?? "Could not verify this path in your Dropbox"),
+          );
+          return;
+        }
+      } catch (err) {
+        setFolderPathError(String(err));
+        return;
+      } finally {
+        setFolderValidating(false);
+      }
+    }
+
+    await commitFolderPath();
+  };
+
   const saveFolderPath = () => {
     // If at least one detected folder exists and the typed path doesn't match
     // any of their parents, require an explicit confirmation before saving.
@@ -183,7 +220,7 @@ export function SettingsPanel({
         return;
       }
     }
-    void commitFolderPath();
+    void validateAndCommit();
   };
 
   /** Apply a detected "NAPA Admin Data" folder's parent path as the setting. */
@@ -404,6 +441,7 @@ export function SettingsPanel({
                   onChange={(e) => handleFolderPathChange(e.target.value)}
                   placeholder="/NAPA Courier Admin"
                   className="font-mono text-sm"
+                  disabled={folderValidating}
                 />
                 <Button
                   variant="outline"
@@ -426,8 +464,12 @@ export function SettingsPanel({
                   variant="outline"
                   size="sm"
                   onClick={saveFolderPath}
-                  className="shrink-0"
+                  disabled={folderValidating}
+                  className="shrink-0 gap-1"
                 >
+                  {folderValidating
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : null}
                   {folderSaved ? 'Saved ✓' : 'Save'}
                 </Button>
                 <Button
@@ -446,6 +488,14 @@ export function SettingsPanel({
                   Browse
                 </Button>
               </div>
+
+              {/* Save-time path validation error */}
+              {folderPathError !== null && (
+                <div className="flex items-start gap-2 p-2.5 rounded-md text-xs border border-destructive/30 bg-destructive/5 text-destructive">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{folderPathError}</span>
+                </div>
+              )}
 
               {/* Test result */}
               {folderTestResult !== null && (
@@ -630,7 +680,7 @@ export function SettingsPanel({
           <AlertDialogFooter>
             <AlertDialogCancel>Go back</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => void commitFolderPath()}
+              onClick={() => void validateAndCommit()}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Save anyway

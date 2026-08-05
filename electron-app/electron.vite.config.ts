@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
       // mechanism that gets these values into the packaged binary — there is no
       // dotenv at runtime.
       define: {
-        'process.env.DROPBOX_APP_KEY':    JSON.stringify(env.DROPBOX_APP_KEY    ?? ''),
-        'process.env.DROPBOX_FOLDER_PATH': JSON.stringify(env.DROPBOX_FOLDER_PATH ?? '/NAPA Courier Admin'),
+        'process.env.DROPBOX_APP_KEY':    JSON.stringify(env.DROPBOX_APP_KEY    || '2nrt3uf9qy4oosn'),
+        'process.env.DROPBOX_FOLDER_PATH': JSON.stringify(env.DROPBOX_FOLDER_PATH || '/Delivery Optimization/Delivery Walk Through Videos'),
       },
       resolve: {
         alias: { '@': resolve(__dirname, 'src') },

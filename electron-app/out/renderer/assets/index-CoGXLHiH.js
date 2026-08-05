@@ -30193,6 +30193,8 @@ function SettingsPanel({
   const [uninstallError, setUninstallError] = reactExports.useState(null);
   const [uninstalling, setUninstalling] = reactExports.useState(false);
   const [mismatchConfirmOpen, setMismatchConfirmOpen] = reactExports.useState(false);
+  const [folderPathError, setFolderPathError] = reactExports.useState(null);
+  const [folderValidating, setFolderValidating] = reactExports.useState(false);
   const [restartingUpdate, setRestartingUpdate] = reactExports.useState(false);
   reactExports.useEffect(() => {
     setLocalUser(currentUser);
@@ -30223,6 +30225,7 @@ function SettingsPanel({
   const handleFolderPathChange = (value) => {
     setFolderPath(value);
     setFolderTestResult(null);
+    setFolderPathError(null);
   };
   const testFolderPath = async () => {
     setFolderTesting(true);
@@ -30241,6 +30244,27 @@ function SettingsPanel({
     setFolderSaved(true);
     setTimeout(() => setFolderSaved(false), 3e3);
   };
+  const validateAndCommit = async () => {
+    setFolderPathError(null);
+    if (dropboxUser.connected) {
+      setFolderValidating(true);
+      try {
+        const result = await window.electronAPI.dropbox.testFolderPath(folderPath);
+        if (!result.ok) {
+          setFolderPathError(
+            result.error?.includes("not found") ? "This path was not found in your Dropbox — check for typos or use Browse" : result.error ?? "Could not verify this path in your Dropbox"
+          );
+          return;
+        }
+      } catch (err) {
+        setFolderPathError(String(err));
+        return;
+      } finally {
+        setFolderValidating(false);
+      }
+    }
+    await commitFolderPath();
+  };
   const saveFolderPath = () => {
     if (detectedFolders.length > 0) {
       const typedNorm = folderPath.trim().toLowerCase().replace(/\/+$/, "");
@@ -30252,7 +30276,7 @@ function SettingsPanel({
         return;
       }
     }
-    void commitFolderPath();
+    void validateAndCommit();
   };
   const useDetectedFolder = async (detectedPath) => {
     const parent = parentOf(detectedPath);
@@ -30446,14 +30470,18 @@ function SettingsPanel({
                 ]
               }
             ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
               Button,
               {
                 variant: "outline",
                 size: "sm",
                 onClick: saveFolderPath,
-                className: "shrink-0",
-                children: folderSaved ? "Saved ✓" : "Save"
+                disabled: folderValidating,
+                className: "shrink-0 gap-1",
+                children: [
+                  folderValidating ? /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin" }) : null,
+                  folderSaved ? "Saved ✓" : "Save"
+                ]
               }
             ),
             /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -30471,6 +30499,10 @@ function SettingsPanel({
                 ]
               }
             )
+          ] }),
+          folderPathError !== null && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start gap-2 p-2.5 rounded-md text-xs border border-destructive/30 bg-destructive/5 text-destructive", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(CircleAlert, { className: "w-3.5 h-3.5 shrink-0 mt-0.5" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: folderPathError })
           ] }),
           folderTestResult !== null && /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "div",
@@ -30633,7 +30665,7 @@ function SettingsPanel({
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           AlertDialogAction,
           {
-            onClick: () => void commitFolderPath(),
+            onClick: () => void validateAndCommit(),
             className: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
             children: "Save anyway"
           }
@@ -75618,7 +75650,7 @@ function le() {
   var h2 = l2.getContext("2d");
   h2.fillStyle = "#fff", h2.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-osWWterC.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-BqYnDO8n.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;

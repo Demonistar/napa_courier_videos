@@ -448,3 +448,190 @@ describe('SettingsPanel — mismatch confirmation dialog', () => {
     );
   });
 });
+
+// ─── Save-time path validation ────────────────────────────────────────────────
+
+/**
+ * These tests cover the new `validateAndCommit` guard: when the admin clicks
+ * Save (and the mismatch check passes), the app calls testFolderPath via IPC
+ * before writing the setting.  A not-found response must show an inline error
+ * and prevent the setting from being saved.
+ */
+describe('SettingsPanel — save-time path validation', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const connectedDropboxUser: DropboxUserInfo = {
+    connected: true,
+    name: 'Test Admin',
+    email: 'admin@example.com',
+  };
+
+  /**
+   * Stub with no detected folders so the mismatch check is skipped and
+   * validateAndCommit fires immediately on Save.
+   */
+  function stubWithTestFolderPath({
+    testFolderPathResult,
+    settingsSet = vi.fn().mockResolvedValue(undefined),
+  }: {
+    testFolderPathResult: { ok: boolean; error?: string; message?: string };
+    settingsSet?: ReturnType<typeof vi.fn>;
+  }) {
+    const testFolderPath = vi.fn().mockResolvedValue(testFolderPathResult);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      writable: true,
+      value: {
+        app: {
+          getVersion: vi.fn().mockResolvedValue('1.0.0'),
+          getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
+          quitAndInstall: vi.fn(),
+        },
+        settings: {
+          get: vi.fn().mockResolvedValue({ dropboxFolderPath: '', theme: 'light' }),
+          set: settingsSet,
+        },
+        dropbox: {
+          findNapaAdminFolders: vi.fn().mockResolvedValue({ ok: true, folders: [] }),
+          testFolderPath,
+        },
+      },
+    });
+    return { testFolderPath, settingsSet };
+  }
+
+  it('saves the path when testFolderPath returns ok', async () => {
+    const { settingsSet } = stubWithTestFolderPath({
+      testFolderPathResult: { ok: true, message: '✓ Path is accessible (no data yet)' },
+    });
+
+    render(
+      <SettingsPanel {...defaultProps({ dropboxUser: connectedDropboxUser })} />,
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Valid Folder' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ dropboxFolderPath: '/Valid Folder' });
+
+    // No inline error should be shown.
+    expect(
+      screen.queryByText(/not found in your dropbox/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows an inline error and does not save when testFolderPath returns not-found', async () => {
+    const { settingsSet } = stubWithTestFolderPath({
+      testFolderPathResult: {
+        ok: false,
+        error: 'Folder not found in your Dropbox: /Bad Path',
+      },
+    });
+
+    render(
+      <SettingsPanel {...defaultProps({ dropboxUser: connectedDropboxUser })} />,
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Bad Path' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // Inline error must appear.
+    expect(
+      await screen.findByText(/not found in your dropbox/i),
+    ).toBeInTheDocument();
+
+    // settings.set must NOT have been called.
+    expect(settingsSet).not.toHaveBeenCalled();
+  });
+
+  it('skips validation and saves directly when Dropbox is disconnected', async () => {
+    const settingsSet = vi.fn().mockResolvedValue(undefined);
+    const testFolderPath = vi.fn();
+
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      writable: true,
+      value: {
+        app: {
+          getVersion: vi.fn().mockResolvedValue('1.0.0'),
+          getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
+          quitAndInstall: vi.fn(),
+        },
+        settings: {
+          get: vi.fn().mockResolvedValue({ dropboxFolderPath: '', theme: 'light' }),
+          set: settingsSet,
+        },
+        // dropbox namespace is intentionally omitted — the component is
+        // disconnected and must not call testFolderPath at all.
+      },
+    });
+
+    render(
+      <SettingsPanel {...defaultProps({ dropboxUser: disconnectedDropboxUser })} />,
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Offline Path' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // Path saved without any Dropbox call.
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ dropboxFolderPath: '/Offline Path' });
+    expect(testFolderPath).not.toHaveBeenCalled();
+  });
+
+  it('disables the path input while validation is in progress', async () => {
+    // Use a never-resolving promise to freeze the component mid-validation.
+    let resolve!: (v: { ok: boolean }) => void;
+    const pending = new Promise<{ ok: boolean }>((r) => { resolve = r; });
+
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      writable: true,
+      value: {
+        app: {
+          getVersion: vi.fn().mockResolvedValue('1.0.0'),
+          getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
+          quitAndInstall: vi.fn(),
+        },
+        settings: {
+          get: vi.fn().mockResolvedValue({ dropboxFolderPath: '', theme: 'light' }),
+          set: vi.fn().mockResolvedValue(undefined),
+        },
+        dropbox: {
+          findNapaAdminFolders: vi.fn().mockResolvedValue({ ok: true, folders: [] }),
+          testFolderPath: vi.fn().mockReturnValue(pending),
+        },
+      },
+    });
+
+    render(
+      <SettingsPanel {...defaultProps({ dropboxUser: connectedDropboxUser })} />,
+    );
+
+    const input = screen.getByRole('textbox', { name: /data folder path/i });
+    fireEvent.change(input, { target: { value: '/Some Path' } });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    fireEvent.click(saveButtons[0]);
+
+    // While the validation promise is pending, the input must be disabled.
+    await waitFor(() => expect(input).toBeDisabled());
+
+    // Resolve the promise to unblock the component.
+    resolve({ ok: true });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
+  });
+});
