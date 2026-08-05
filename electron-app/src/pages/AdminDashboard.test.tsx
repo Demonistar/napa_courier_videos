@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import AdminDashboard from './AdminDashboard';
 
@@ -65,15 +65,20 @@ vi.mock('@/hooks/use-toast', () => ({
 // ─── electronAPI stub factory ─────────────────────────────────────────────────
 
 type UpdateReadyListener = () => void;
+type DownloadProgressInfo = { percent: number; bytesPerSecond: number; transferred: number; total: number };
+type DownloadProgressListener = (info: DownloadProgressInfo) => void;
 
 function makeElectronAPI(updateDownloaded: boolean) {
   // Capture the listeners so tests can fire them programmatically.
   let storedReadyListener: UpdateReadyListener | null = null;
   let storedCancelledListener: UpdateReadyListener | null = null;
+  let storedProgressListener: DownloadProgressListener | null = null;
 
   const api = {
     app: {
       getUpdateStatus: vi.fn().mockResolvedValue({ updateDownloaded }),
+      getVersion: vi.fn().mockResolvedValue('1.0.0'),
+      getPlatform: vi.fn().mockResolvedValue({ platform: 'darwin', appBundlePath: '' }),
       onUpdateReady: vi.fn().mockImplementation((cb: UpdateReadyListener) => {
         storedReadyListener = cb;
         // Return cleanup function.
@@ -83,7 +88,10 @@ function makeElectronAPI(updateDownloaded: boolean) {
         storedCancelledListener = cb;
         return () => { storedCancelledListener = null; };
       }),
-      onDownloadProgress: vi.fn().mockReturnValue(() => {}),
+      onDownloadProgress: vi.fn().mockImplementation((cb: DownloadProgressListener) => {
+        storedProgressListener = cb;
+        return () => { storedProgressListener = null; };
+      }),
     },
     auth: {
       getStatus: vi.fn().mockResolvedValue({ authenticated: false }),
@@ -95,17 +103,30 @@ function makeElectronAPI(updateDownloaded: boolean) {
       load: vi.fn().mockResolvedValue({ locations: [], auditLog: [], currentUser: 'Test Admin' }),
       publish: vi.fn().mockResolvedValue({ ok: true }),
     },
+    settings: {
+      get: vi.fn().mockResolvedValue({ dropboxFolderPath: '', theme: 'light' }),
+      set: vi.fn().mockResolvedValue(undefined),
+    },
+    dropbox: {
+      findNapaAdminFolders: vi.fn().mockResolvedValue({ ok: true, folders: [] }),
+      testFolderPath: vi.fn().mockResolvedValue({ ok: true }),
+      uploadImage: vi.fn(),
+      downloadImage: vi.fn(),
+    },
+  };
+
+  type Helpers = {
+    _fireUpdateReady: () => void;
+    _fireUpdateCancelled: () => void;
+    _fireDownloadProgress: (info: DownloadProgressInfo) => void;
   };
 
   // Expose helpers to fire push events in tests.
-  (api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void })._fireUpdateReady = () => {
-    storedReadyListener?.();
-  };
-  (api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void })._fireUpdateCancelled = () => {
-    storedCancelledListener?.();
-  };
+  (api as typeof api & Helpers)._fireUpdateReady = () => { storedReadyListener?.(); };
+  (api as typeof api & Helpers)._fireUpdateCancelled = () => { storedCancelledListener?.(); };
+  (api as typeof api & Helpers)._fireDownloadProgress = (info) => { storedProgressListener?.(info); };
 
-  return api as typeof api & { _fireUpdateReady: () => void; _fireUpdateCancelled: () => void };
+  return api as typeof api & Helpers;
 }
 
 function setElectronAPI(api: ReturnType<typeof makeElectronAPI>) {
@@ -222,5 +243,121 @@ describe('AdminDashboard — update badge lifecycle', () => {
     });
 
     expect(screen.queryByLabelText('Update available')).not.toBeInTheDocument();
+  });
+});
+
+// ─── Download progress flow ───────────────────────────────────────────────────
+
+describe('AdminDashboard — download progress flow', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('subscribes to onDownloadProgress on mount', async () => {
+    const api = makeElectronAPI(false);
+    setElectronAPI(api);
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(api.app.getUpdateStatus).toHaveBeenCalledOnce();
+    });
+
+    expect(api.app.onDownloadProgress).toHaveBeenCalledOnce();
+  });
+
+  it('passes downloadProgress into SettingsPanel so the progress bar appears', async () => {
+    const api = makeElectronAPI(false);
+    setElectronAPI(api);
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(api.app.getUpdateStatus).toHaveBeenCalledOnce();
+    });
+
+    // Fire a download-progress push event from the main process.
+    act(() => {
+      api._fireDownloadProgress({ percent: 57, bytesPerSecond: 2000, transferred: 57, total: 100 });
+    });
+
+    // Open the Settings panel.
+    fireEvent.click(screen.getByTestId('button-settings'));
+
+    // The progress bar section and the percent label must be visible.
+    await waitFor(() => {
+      expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText('57%')).toBeInTheDocument();
+  });
+
+  it('clears downloadProgress when the update-ready event fires', async () => {
+    const api = makeElectronAPI(false);
+    setElectronAPI(api);
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(api.app.getUpdateStatus).toHaveBeenCalledOnce();
+    });
+
+    // Simulate a download in progress.
+    act(() => {
+      api._fireDownloadProgress({ percent: 90, bytesPerSecond: 1500, transferred: 90, total: 100 });
+    });
+
+    // Open Settings and confirm progress bar is showing.
+    fireEvent.click(screen.getByTestId('button-settings'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+    });
+
+    // Main process signals download complete → updateReady fires.
+    act(() => { api._fireUpdateReady(); });
+
+    // Progress bar should disappear; Restart button should appear.
+    expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument();
+  });
+
+  it('walks the full 0% → 100% → restart flow through the same IPC path', async () => {
+    const api = makeElectronAPI(false);
+    setElectronAPI(api);
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(api.app.getUpdateStatus).toHaveBeenCalledOnce();
+    });
+
+    // Open Settings before any progress arrives.
+    fireEvent.click(screen.getByTestId('button-settings'));
+
+    // ── 0% ──────────────────────────────────────────────────────────────
+    act(() => {
+      api._fireDownloadProgress({ percent: 0, bytesPerSecond: 0, transferred: 0, total: 100 });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /restart/i })).not.toBeInTheDocument();
+
+    // ── 100% ─────────────────────────────────────────────────────────────
+    act(() => {
+      api._fireDownloadProgress({ percent: 100, bytesPerSecond: 2000, transferred: 100, total: 100 });
+    });
+
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /restart/i })).not.toBeInTheDocument();
+
+    // ── update-ready → restart ─────────────────────────────────────────
+    act(() => { api._fireUpdateReady(); });
+
+    expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument();
   });
 });

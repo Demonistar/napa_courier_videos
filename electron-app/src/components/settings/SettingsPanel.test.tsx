@@ -157,3 +157,118 @@ describe('SettingsPanel — Restart to Install button', () => {
     expect(restartButton).toBeDisabled();
   });
 });
+
+// ─── Download progress bar ────────────────────────────────────────────────────
+
+describe('SettingsPanel — download progress bar', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows the progress bar when downloadProgress is set and updateReady is false', () => {
+    stubElectronAPI();
+
+    render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: { percent: 42, bytesPerSecond: 1000, transferred: 42, total: 100 },
+          updateReady: false,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+  });
+
+  it('displays the correct percent label', () => {
+    stubElectronAPI();
+
+    render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: { percent: 42, bytesPerSecond: 1000, transferred: 42, total: 100 },
+          updateReady: false,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('42%')).toBeInTheDocument();
+  });
+
+  it('rounds the percent value when it is fractional', () => {
+    stubElectronAPI();
+
+    render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: { percent: 73.7, bytesPerSecond: 500, transferred: 73, total: 100 },
+          updateReady: false,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('74%')).toBeInTheDocument();
+  });
+
+  it('hides the progress bar and shows the Restart button once updateReady becomes true', () => {
+    stubElectronAPI();
+
+    const { rerender } = render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: { percent: 99, bytesPerSecond: 500, transferred: 99, total: 100 },
+          updateReady: false,
+        })}
+      />,
+    );
+
+    // Progress bar is visible during download.
+    expect(screen.getByText(/downloading update/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /restart/i })).not.toBeInTheDocument();
+
+    // Update finishes — parent sets updateReady: true.
+    rerender(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: null,
+          updateReady: true,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument();
+  });
+
+  it('does not show the progress bar when downloadProgress is null', () => {
+    stubElectronAPI();
+
+    render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: null,
+          updateReady: false,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show the progress bar when updateReady is already true', () => {
+    stubElectronAPI();
+
+    // Both props set — updateReady wins; the progress bar should not appear.
+    render(
+      <SettingsPanel
+        {...defaultProps({
+          downloadProgress: { percent: 80, bytesPerSecond: 800, transferred: 80, total: 100 },
+          updateReady: true,
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/downloading update/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument();
+  });
+});
