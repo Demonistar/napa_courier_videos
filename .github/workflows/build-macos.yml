@@ -18,32 +18,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
+      # ── 2. Node.js ───────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
       # ── 3. Install dependencies ───────────────────────────────────────────────
       #
-      # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
-      # Install from the workspace root so pnpm resolves catalog: specifiers.
+      # electron-app has its own package-lock.json (npm, not pnpm), generated
+      # outside the pnpm workspace. Using npm ci here, not pnpm, is required —
+      # pnpm-lock.yaml was generated on Linux and marks darwin-specific optional
+      # native binaries (e.g. @rollup/rollup-darwin-arm64) as excluded, causing
+      # a "Cannot find module @rollup/rollup-darwin-arm64" failure. npm ci
+      # correctly resolves the right platform binary for whatever runner it's
+      # actually on. Do NOT add --ignore-scripts — Electron's postinstall
+      # script needs to run to download the Electron binary itself.
       - name: Install dependencies
-        run: pnpm install
+        working-directory: electron-app
+        run: npm ci
 
       # ── 4. Stamp version from release tag ────────────────────────────────────
       #
       # Strips the leading "v" from the tag (e.g. v1.2.0 → 1.2.0) and writes it
       # into electron-app/package.json so electron-builder picks it up for the
       # installer filename and About screen.
-      #
-      # Uses a Node script instead of `npm version` because the package.json
-      # contains pnpm catalog: specifiers that npm does not understand.
       #
       # The tag is passed through an env variable rather than inline shell
       # interpolation to prevent workflow-command injection from crafted tag names.
@@ -110,7 +109,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-        run: pnpm run build && electron-builder --mac --publish never
+        run: npm run build && npx electron-builder --mac --publish never --config electron-builder.config.js
 
       # ── 7. Verify code signature ──────────────────────────────────────────────
       #
