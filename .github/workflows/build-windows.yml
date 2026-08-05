@@ -56,10 +56,19 @@ jobs:
 
       # ── 4. Install dependencies ───────────────────────────────────────────────
       #
-      # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
+      # Do NOT use --frozen-lockfile here.  The pnpm-lock.yaml is generated on
+      # Linux and marks Windows-specific optional native binaries (e.g.
+      # @rollup/rollup-win32-x64-msvc) as "-" (excluded).  With
+      # --frozen-lockfile, pnpm honours those exclusions on the Windows runner,
+      # causing a "Cannot find module @rollup/rollup-win32-x64-msvc" failure
+      # inside electron-vite build.
+      #
+      # Without --frozen-lockfile, pnpm still uses the lockfile for all
+      # non-optional packages (fully deterministic) but correctly resolves
+      # platform-specific optional native binaries for the current runner OS.
       # Install from the workspace root so pnpm resolves catalog: specifiers.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       # ── 4. Stamp version from release tag ────────────────────────────────────
       #
