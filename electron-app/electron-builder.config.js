@@ -50,7 +50,7 @@ const config = {
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     requestedExecutionLevel: 'asInvoker',
-    signingHashAlgorithms: ['sha256'],
+    // signingHashAlgorithms was removed in electron-builder v26; use signtoolOptions instead.
     // Only set icon if the file actually exists; otherwise electron-builder
     // uses its own default icon and the build succeeds regardless.
     ...(hasIco ? { icon: 'build/icon.ico' } : {}),
