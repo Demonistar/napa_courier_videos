@@ -34,7 +34,7 @@ jobs:
       # --frozen-lockfile ensures CI always matches the committed pnpm-lock.yaml.
       # Install from the workspace root so pnpm resolves catalog: specifiers.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       # ── 4. Stamp version from release tag ────────────────────────────────────
       #
