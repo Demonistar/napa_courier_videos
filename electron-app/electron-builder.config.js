@@ -64,6 +64,18 @@ const config = {
     createDesktopShortcut:           true,
     createStartMenuShortcut:         true,
     shortcutName:                    'NAPA Courier Admin',
+    // No spaces: the default "${productName} Setup ${version}.${ext}" template
+    // bakes spaces from productName ("NAPA Courier Admin") into the real local
+    // filename. electron-builder separately writes a hyphen-sanitized version
+    // of that name into latest.yml for the update feed, while GitHub's own
+    // release-asset upload silently converts spaces to dots on the actual
+    // uploaded file. Three different sanitization rules on the same original
+    // name produce three different filenames that don't match each other —
+    // which is exactly what broke auto-update on v1.0.16 (latest.yml pointed
+    // at a hyphenated name; the real uploaded asset ended up dotted). Using an
+    // artifactName with no spaces to begin with means none of those three
+    // sanitization steps have anything to change, so all three stay identical.
+    artifactName: 'NAPA-Courier-Admin-Setup-${version}.${ext}',
     ...(hasIco     ? {
       installerIcon:       'build/icon.ico',
       uninstallerIcon:     'build/icon.ico',
@@ -82,6 +94,9 @@ const config = {
       { target: 'deb',      arch: ['x64'] },
     ],
     category: 'Utility',
+    // Same space-free naming fix as nsis.artifactName above — see that
+    // comment for the full explanation of the three-way sanitization mismatch.
+    artifactName: 'NAPA-Courier-Admin-${version}-${arch}.${ext}',
     // electron-builder auto-derives Linux icon sizes from icon.icns when no
     // explicit PNG is supplied, so no guard is needed here.
   },
@@ -94,6 +109,8 @@ const config = {
     category:          'public.app-category.productivity',
     hardenedRuntime:   true,
     gatekeeperAssess:  false,
+    // Same space-free naming fix as nsis.artifactName above.
+    artifactName: 'NAPA-Courier-Admin-${version}-${arch}.${ext}',
     ...(hasIcns         ? { icon: 'build/icon.icns' }                         : {}),
     ...(hasEntitlements ? { entitlements:        'build/entitlements.mac.plist',
                             entitlementsInherit: 'build/entitlements.mac.plist' } : {}),
