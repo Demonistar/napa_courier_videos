@@ -53,6 +53,8 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     saveError,
     recoveryNotice,
     pendingChangesCount,
+    lookup,
+    backfillAddressesFromLookup,
     addLocation,
     updateLocation,
     deleteLocation,
@@ -309,6 +311,26 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     }
   };
 
+  // ── Address backfill ─────────────────────────────────────────────────────
+
+  const handleBackfillAddresses = () => {
+    const { updated, skipped } = backfillAddressesFromLookup();
+    if (updated === 0) {
+      toast({
+        title: 'No addresses to backfill',
+        description:
+          skipped > 0
+            ? `${skipped} location${skipped !== 1 ? 's' : ''} still missing address info with no matching account number in the lookup.`
+            : 'All locations already have address, city, and state.',
+      });
+    } else {
+      toast({
+        title: 'Addresses backfilled',
+        description: `${updated} location${updated !== 1 ? 's' : ''} updated from the customer lookup. Publish when ready.`,
+      });
+    }
+  };
+
   // ── CSV Import ────────────────────────────────────────────────────────────
 
   const handleImportLocations = (rows: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>[], source: string) => {
@@ -392,6 +414,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onOpenBackup={() => setBackupOpen(true)}
         onOpenImport={() => { setImportSeedData(undefined); setImportOpen(true); }}
         onOpenGenerateLinks={() => setGenerateLinksOpen(true)}
+        onBackfillAddresses={handleBackfillAddresses}
         dropboxUser={dropboxUser}
         updateReady={updateReady}
         downloadProgress={downloadProgress}
@@ -439,6 +462,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
                     <LocationForm
                       location={viewMode === 'modify' ? (selectedLocation ?? undefined) : undefined}
                       allLocations={state.locations}
+                      lookup={lookup}
                       onSave={handleSaveLocation}
                       onCancel={() => {
                         // If the user cancels during the tour's "form-actions" step,

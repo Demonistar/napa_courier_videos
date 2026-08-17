@@ -54,6 +54,15 @@ declare global {
           dropboxPath: string,
         ): Promise<{ ok: boolean; snapshot?: unknown; error?: string }>;
         saveBackup(entry: unknown): Promise<{ ok: boolean; error?: string }>;
+        loadLookup(): Promise<{
+          ok: boolean;
+          data?: Record<string, { address?: string; city?: string; state?: string }>;
+          error?: string;
+        }>;
+        upsertLookupEntry(
+          accountNumber: string,
+          updates: { address?: string; city?: string; state?: string },
+        ): Promise<{ ok: boolean; error?: string }>;
       };
       settings: {
         get(): Promise<AppSettings>;

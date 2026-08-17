@@ -567,6 +567,52 @@ async function publishToLive(
   }
 }
 
+// ─── Customer address lookup ────────────────────────────────────────────────
+
+interface LookupEntry {
+  address?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  customerName?: string;
+}
+
+async function loadLookupFile(folder: string): Promise<Record<string, LookupEntry>> {
+  const result = await dbxDownload(folderPath(folder, 'customer-lookup.json'));
+  if (!result) return {};
+  try {
+    return JSON.parse(result.content) as Record<string, LookupEntry>;
+  } catch (err) {
+    console.error('[lookup] Failed to parse customer-lookup.json:', err);
+    return {};
+  }
+}
+
+/**
+ * Merges a partial address update into the lookup entry for one account
+ * number and writes the whole file back. Last-write-wins for this file —
+ * concurrent edits to *different* account numbers from different admins are
+ * safe (each write re-downloads and merges before uploading), but two admins
+ * correcting the *same* account number in the same instant could race.
+ * Acceptable for this data: address corrections are infrequent, and the next
+ * save re-syncs whichever value was most recently typed, so it's self-healing.
+ */
+async function upsertLookupEntry(
+  folder: string,
+  accountNumber: string,
+  updates: Partial<LookupEntry>,
+): Promise<void> {
+  if (!accountNumber.trim()) return;
+  const lookup = await loadLookupFile(folder);
+  const existing = lookup[accountNumber] ?? {};
+  lookup[accountNumber] = { ...existing, ...updates };
+  await dbxUpload(
+    folderPath(folder, 'customer-lookup.json'),
+    JSON.stringify(lookup, null, 2),
+  );
+}
+
 const MAX_BACKUPS = 20;
 
 async function listBackups(folder: string): Promise<Array<{ id: string; label: string; timestamp: string; locationId: string | null; locationName: string | null; dropboxPath: string }>> {
@@ -750,6 +796,29 @@ function registerIpcHandlers() {
       return { ok: false, error: (err as Error).message };
     }
   });
+
+  ipcMain.handle('data:loadLookup', async () => {
+    const { dropboxFolderPath } = loadSettings();
+    try {
+      const lookup = await loadLookupFile(dropboxFolderPath);
+      return { ok: true, data: lookup };
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle(
+    'data:upsertLookupEntry',
+    async (_event, accountNumber: string, updates: Partial<LookupEntry>) => {
+      const { dropboxFolderPath } = loadSettings();
+      try {
+        await upsertLookupEntry(dropboxFolderPath, accountNumber, updates);
+        return { ok: true };
+      } catch (err: unknown) {
+        return { ok: false, error: (err as Error).message };
+      }
+    },
+  );
 
   // ── Settings ──────────────────────────────────────────────────────────────
 

@@ -19,6 +19,16 @@ export interface Location {
   updatedAt: string;
 }
 
+/** One entry in the customer address lookup (customer-lookup.json). */
+export interface LookupEntry {
+  address?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  customerName?: string;
+}
+
 export interface AuditEntry {
   id: string;
   locationId: string;
@@ -119,6 +129,8 @@ export function useLocationStore() {
   // Recovery notice when staging was empty but live data was found — non-destructive toast
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [cachedBackups, setCachedBackups] = useState<BackupEntry[]>([]);
+  // Customer address lookup (customer-lookup.json) — keyed by account number.
+  const [lookup, setLookup] = useState<Record<string, LookupEntry>>({});
 
   // Current Dropbox rev of locations-staging.json — used for write-safety
   const stagingRevRef = useRef('');
@@ -137,10 +149,17 @@ export function useLocationStore() {
     setHasConflict(false);
     setConflictMessage(null);
     try {
-      const [stagingResult, liveResult] = await Promise.all([
+      const [stagingResult, liveResult, lookupResult] = await Promise.all([
         window.electronAPI.data.loadStaging(),
         window.electronAPI.data.loadLive(),
+        window.electronAPI.data.loadLookup(),
       ]);
+
+      if (lookupResult.ok) {
+        setLookup((lookupResult.data as Record<string, LookupEntry>) ?? {});
+      }
+      // A lookup load failure is non-fatal — auto-fill/backfill just won't
+      // have data to work with this session. Don't block the staging/live load on it.
 
       if (!stagingResult.ok) {
         // Real error (network, API failure) — surface it as a toast in the dashboard
@@ -252,6 +271,115 @@ export function useLocationStore() {
     window.electronAPI.data.saveBackup(entry).catch(console.error);
   }, []);
 
+  // ── Customer address lookup sync ────────────────────────────────────────────
+
+  /**
+   * After a location is saved, reconciles its address/city/state against the
+   * customer lookup for its account number:
+   *   - No account number, or nothing typed in address/city/state → no-op.
+   *   - Account number not yet in the lookup → write a new entry.
+   *   - Account number in the lookup and the typed values match (aside from
+   *     casing) → no write needed.
+   *   - Account number in the lookup but the typed values are genuinely
+   *     different → the manually-entered data is treated as the correction;
+   *     overwrite the lookup so stale data doesn't keep surfacing later.
+   * Only fields the admin actually typed are synced — never pushes blanks
+   * into the lookup.
+   */
+  const syncLookupIfNeeded = useCallback((location: Location) => {
+    const acct = location.accountNumber.trim();
+    if (!acct) return;
+
+    const typedAddress = location.address.trim();
+    const typedCity = location.city.trim();
+    const typedState = location.state.trim();
+    if (!typedAddress && !typedCity && !typedState) return;
+
+    const existing = lookup[acct];
+    const norm = (s: string) => s.trim().toLowerCase();
+    const sameAsFiled = (typed: string, filed: string | undefined) =>
+      !typed || norm(typed) === norm(filed ?? '');
+
+    const needsUpdate =
+      !existing ||
+      !sameAsFiled(typedAddress, existing.address) ||
+      !sameAsFiled(typedCity, existing.city) ||
+      !sameAsFiled(typedState, existing.state);
+
+    if (!needsUpdate) return;
+
+    const updates: Partial<LookupEntry> = {};
+    if (typedAddress) updates.address = typedAddress;
+    if (typedCity) updates.city = typedCity;
+    if (typedState) updates.state = typedState;
+
+    setLookup((prev) => ({ ...prev, [acct]: { ...prev[acct], ...updates } }));
+    window.electronAPI.data.upsertLookupEntry(acct, updates).catch((err) => {
+      console.error('[lookup] Failed to sync address lookup:', err);
+    });
+  }, [lookup]);
+
+  /**
+   * Fills blank address/city/state fields on existing locations from the
+   * customer lookup, matched by account number. Only touches fields that
+   * are currently empty — never overwrites data that's already there.
+   * Returns counts for the caller to report back to the admin.
+   */
+  const backfillAddressesFromLookup = useCallback((): { updated: number; skipped: number } => {
+    let updated = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+    const newAuditEntries: AuditEntry[] = [];
+
+    const nextLocations = appState.locations.map((loc) => {
+      const missing = !loc.address.trim() || !loc.city.trim() || !loc.state.trim();
+      if (!missing) return loc;
+      if (!loc.accountNumber.trim()) {
+        skipped++;
+        return loc;
+      }
+
+      const entry = lookup[loc.accountNumber.trim()];
+      if (!entry) {
+        skipped++;
+        return loc;
+      }
+
+      const fill: Partial<Location> = {};
+      if (!loc.address.trim() && entry.address) fill.address = entry.address;
+      if (!loc.city.trim() && entry.city) fill.city = entry.city;
+      if (!loc.state.trim() && entry.state) fill.state = entry.state;
+
+      if (Object.keys(fill).length === 0) {
+        skipped++;
+        return loc;
+      }
+
+      const next: Location = { ...loc, ...fill, updatedAt: now };
+      newAuditEntries.push(
+        createAuditEntry(loc.id, 'update', buildLocationDiff(loc, next), appState.currentUser),
+      );
+      updated++;
+      return next;
+    });
+
+    if (updated > 0) {
+      setAppState((prev) => {
+        pushBackup(
+          `Backfilled addresses from customer lookup (${updated} location${updated !== 1 ? 's' : ''})`,
+          prev,
+          null,
+          null,
+        );
+        const next = { ...prev, locations: nextLocations, auditLog: [...prev.auditLog, ...newAuditEntries] };
+        scheduleSync(next);
+        return next;
+      });
+    }
+
+    return { updated, skipped };
+  }, [appState, lookup, pushBackup, scheduleSync]);
+
   // ── CRUD mutations ─────────────────────────────────────────────────────────
 
   const addLocation = useCallback(
@@ -270,13 +398,16 @@ export function useLocationStore() {
         return next;
       });
 
+      syncLookupIfNeeded(newLocation);
       return newLocation;
     },
-    [pushBackup, scheduleSync],
+    [pushBackup, scheduleSync, syncLookupIfNeeded],
   );
 
   const updateLocation = useCallback(
     (id: string, updates: Partial<Location>) => {
+      let savedLocation: Location | null = null;
+
       setAppState((prev) => {
         const old = prev.locations.find((l) => l.id === id);
         if (!old) return prev;
@@ -289,6 +420,7 @@ export function useLocationStore() {
 
         pushBackup(`Edited "${old.siteName}"`, prev, id, old.siteName);
         const updated: Location = { ...old, ...updates, updatedAt: new Date().toISOString() };
+        savedLocation = updated;
         const auditEntry = createAuditEntry(id, 'update', diff, prev.currentUser);
         const next = {
           ...prev,
@@ -298,8 +430,10 @@ export function useLocationStore() {
         scheduleSync(next);
         return next;
       });
+
+      if (savedLocation) syncLookupIfNeeded(savedLocation);
     },
-    [pushBackup, scheduleSync],
+    [pushBackup, scheduleSync, syncLookupIfNeeded],
   );
 
   const deleteLocation = useCallback(
@@ -574,6 +708,9 @@ export function useLocationStore() {
     saveError,
     recoveryNotice,
     pendingChangesCount,
+
+    lookup,
+    backfillAddressesFromLookup,
 
     addLocation,
     updateLocation,

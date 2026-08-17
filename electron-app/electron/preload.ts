@@ -62,6 +62,13 @@ const api = {
       ipcRenderer.invoke('data:loadBackup', dropboxPath),
     saveBackup: (entry: unknown): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('data:saveBackup', entry),
+    loadLookup: (): Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }> =>
+      ipcRenderer.invoke('data:loadLookup'),
+    upsertLookupEntry: (
+      accountNumber: string,
+      updates: { address?: string; city?: string; state?: string },
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('data:upsertLookupEntry', accountNumber, updates),
   },
 
   settings: {

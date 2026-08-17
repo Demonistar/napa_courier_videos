@@ -1,4 +1,4 @@
-import { Search, HelpCircle, Download, Upload, Settings, Cloud, CloudOff, AlertTriangle, Link2 } from 'lucide-react';
+import { Search, HelpCircle, Download, Upload, Settings, Cloud, CloudOff, AlertTriangle, Link2, MapPin } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -40,6 +40,7 @@ interface TopBarProps {
   onOpenBackup: () => void;
   onOpenImport: () => void;
   onOpenGenerateLinks: () => void;
+  onBackfillAddresses: () => void;
   dropboxUser: DropboxUserInfo;
   updateReady?: boolean;
   downloadProgress?: DownloadProgress | null;
@@ -66,6 +67,7 @@ export function TopBar({
   onOpenBackup,
   onOpenImport,
   onOpenGenerateLinks,
+  onBackfillAddresses,
   dropboxUser,
   updateReady = false,
   downloadProgress = null,
@@ -148,6 +150,10 @@ export function TopBar({
         <Button variant="outline" onClick={onOpenGenerateLinks} data-testid="button-generate-links">
           <Link2 className="w-4 h-4 mr-2" />
           Generate Links
+        </Button>
+        <Button variant="outline" onClick={onBackfillAddresses} data-testid="button-backfill-addresses">
+          <MapPin className="w-4 h-4 mr-2" />
+          Backfill Addresses
         </Button>
 
         <DropdownMenu>

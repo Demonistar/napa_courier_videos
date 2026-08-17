@@ -6,12 +6,16 @@ import { Label } from '@/components/ui/label';
 import { ComboboxField } from './ComboboxField';
 import { DuplicateWarning } from './DuplicateWarning';
 import { findSimilarLocation } from '@/lib/utils/fuzzy';
-import { Location } from '@/lib/store';
+import { Location, LookupEntry } from '@/lib/store';
 import { AlertCircle, Upload, Loader2 } from 'lucide-react';
 
 interface LocationFormProps {
   location?: Location;
   allLocations: Location[];
+  /** Customer address lookup, keyed by account number — used to auto-fill
+   *  blank state/city/address fields when the typed account number matches
+   *  a known customer. */
+  lookup: Record<string, LookupEntry>;
   onSave: (data: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onCancel: () => void;
   /**
@@ -32,6 +36,7 @@ interface LocationFormProps {
 export function LocationForm({
   location,
   allLocations,
+  lookup,
   onSave,
   onCancel,
   onImageUpload,
@@ -181,6 +186,17 @@ export function LocationForm({
   useEffect(() => {
     onTourFieldChange?.({ state, city, siteName, address });
   }, [state, city, siteName, address]);
+
+  // Auto-fill blank state/city/address from the customer lookup when the
+  // typed account number matches a known customer. Never overwrites a field
+  // the admin has already typed something into.
+  useEffect(() => {
+    const entry = lookup[accountNumber.trim()];
+    if (!entry) return;
+    if (!state.trim() && entry.state) setState(entry.state);
+    if (!city.trim() && entry.city) setCity(entry.city);
+    if (!address.trim() && entry.address) setAddress(entry.address);
+  }, [accountNumber, lookup]);
 
   return (
     <div className="flex flex-col h-full">
