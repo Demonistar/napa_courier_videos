@@ -1,4 +1,4 @@
-import { Search, HelpCircle, Download, Upload, Settings, Cloud, CloudOff, AlertTriangle, Link2, MapPin } from 'lucide-react';
+import { Search, HelpCircle, Download, Upload, Settings, Cloud, CloudOff, AlertTriangle, Link2, MapPin, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +41,8 @@ interface TopBarProps {
   onOpenImport: () => void;
   onOpenGenerateLinks: () => void;
   onBackfillAddresses: () => void;
+  onSyncNow: () => void;
+  syncing: boolean;
   dropboxUser: DropboxUserInfo;
   updateReady?: boolean;
   downloadProgress?: DownloadProgress | null;
@@ -68,6 +70,8 @@ export function TopBar({
   onOpenImport,
   onOpenGenerateLinks,
   onBackfillAddresses,
+  onSyncNow,
+  syncing,
   dropboxUser,
   updateReady = false,
   downloadProgress = null,
@@ -154,6 +158,15 @@ export function TopBar({
         <Button variant="outline" onClick={onBackfillAddresses} data-testid="button-backfill-addresses">
           <MapPin className="w-4 h-4 mr-2" />
           Backfill Addresses
+        </Button>
+        <Button
+          variant="outline"
+          onClick={onSyncNow}
+          disabled={syncing}
+          data-testid="button-sync-now"
+        >
+          <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+          {syncing ? 'Syncing…' : 'Sync Now'}
         </Button>
 
         <DropdownMenu>

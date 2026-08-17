@@ -70,6 +70,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     manualSave,
     manualBackup,
     reload,
+    syncNow,
   } = useLocationStore();
 
   const { user: dropboxUser, disconnect: dropboxDisconnect, refresh: dropboxRefresh } = useDropboxUser();
@@ -311,6 +312,27 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     }
   };
 
+  // ── Manual sync ───────────────────────────────────────────────────────────
+
+  const handleSyncNow = async () => {
+    const result = await syncNow();
+    if (result.ok) {
+      toast({ title: 'Synced', description: 'Pulled the latest data from Dropbox.' });
+    } else if (result.conflict) {
+      toast({
+        title: 'Sync paused — conflict detected',
+        description: result.error ?? 'Another admin saved changes since you loaded. Resolve that first.',
+        variant: 'destructive',
+      });
+    } else {
+      toast({
+        title: 'Sync failed',
+        description: result.error ?? 'Could not reach Dropbox.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   // ── Address backfill ─────────────────────────────────────────────────────
 
   const handleBackfillAddresses = () => {
@@ -415,6 +437,8 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onOpenImport={() => { setImportSeedData(undefined); setImportOpen(true); }}
         onOpenGenerateLinks={() => setGenerateLinksOpen(true)}
         onBackfillAddresses={handleBackfillAddresses}
+        onSyncNow={handleSyncNow}
+        syncing={isLoading || isSaving}
         dropboxUser={dropboxUser}
         updateReady={updateReady}
         downloadProgress={downloadProgress}

@@ -697,6 +697,24 @@ export function useLocationStore() {
     URL.revokeObjectURL(url);
   }, [appState.locations]);
 
+  /**
+   * Manual "Sync Now" — refreshes staging/live/lookup from Dropbox without
+   * requiring the admin to log out/in or restart the app.
+   *
+   * Flushes any unsaved local edits first (via manualSave). This matters:
+   * loadFromDropbox replaces in-memory state wholesale with whatever's
+   * currently in Dropbox, so calling it while an edit is still sitting in
+   * the debounce window would silently discard that edit. If the flush
+   * hits a save conflict, we stop there and surface it rather than
+   * reloading over an unresolved conflict.
+   */
+  const syncNow = useCallback(async (): Promise<{ ok: boolean; conflict?: boolean; error?: string }> => {
+    const saveResult = await manualSave();
+    if (!saveResult.ok) return saveResult;
+    await loadFromDropbox();
+    return { ok: true };
+  }, [manualSave, loadFromDropbox]);
+
   // ── Public interface (matches web app as closely as possible) ─────────────
 
   return {
@@ -726,6 +744,7 @@ export function useLocationStore() {
     restoreSingleLocation,
 
     reload: loadFromDropbox,
+    syncNow,
     resolveConflict,
     manualSave,
     manualBackup,
