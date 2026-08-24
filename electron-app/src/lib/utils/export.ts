@@ -29,6 +29,29 @@ function csvEsc(val: string | null | undefined): string {
     : s;
 }
 
+/**
+ * Returns the account number as a genuine JS number when it round-trips
+ * cleanly (no leading zeros, digits only) — for XLSX this makes
+ * XLSX.utils.aoa_to_sheet emit a real numeric cell instead of text, since
+ * it types each cell by the JS value's actual type. Falls back to the
+ * original string for anything that wouldn't round-trip cleanly (leading
+ * zeros, non-digit characters), where converting to a number would silently
+ * corrupt the value.
+ */
+function acctAsNumberOrString(val: string | null | undefined): number | string {
+  const s = (val ?? '').trim();
+  if (s !== '' && /^\d+$/.test(s) && String(Number(s)) === s) return Number(s);
+  return val ?? '';
+}
+
+/** Same rule as acctAsNumberOrString, but for CSV — a genuine unquoted
+ *  number string so Excel reads it as a number rather than text. */
+function csvEscAcct(val: string | null | undefined): string {
+  const s = (val ?? '').trim();
+  if (s !== '' && /^\d+$/.test(s) && String(Number(s)) === s) return s;
+  return csvEsc(val);
+}
+
 const HEADERS = [
   'Site Name', 'Account Number', 'State', 'City',
   'Address', 'Instructions', 'Video URL', 'Image URL',
@@ -41,11 +64,22 @@ function toRow(loc: Location): string[] {
   ];
 }
 
+/** Same as toRow, but with accountNumber as a real number where it safely
+ *  round-trips — used only for XLSX, where aoa_to_sheet types each cell by
+ *  the JS value's actual type. toRow (string-only) stays as-is for TXT,
+ *  where there's no real "cell type" concept to fix either way. */
+function toXlsxRow(loc: Location): (string | number)[] {
+  return [
+    loc.siteName ?? '', acctAsNumberOrString(loc.accountNumber), loc.state ?? '', loc.city ?? '',
+    loc.address ?? '', loc.instructions ?? '', loc.videoUrl ?? '', loc.imageUrl ?? '',
+  ];
+}
+
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 
 export function exportCsv(locations: Location[]): void {
   const rows = locations.map((loc) =>
-    [csvEsc(loc.siteName), csvEsc(loc.accountNumber), csvEsc(loc.state), csvEsc(loc.city),
+    [csvEsc(loc.siteName), csvEscAcct(loc.accountNumber), csvEsc(loc.state), csvEsc(loc.city),
      csvEsc(loc.address), csvEsc(loc.instructions), csvEsc(loc.videoUrl), csvEsc(loc.imageUrl)].join(','),
   );
   const csv = [HEADERS.join(','), ...rows].join('\n');
@@ -58,7 +92,7 @@ export function exportCsv(locations: Location[]): void {
 // ─── XLSX ─────────────────────────────────────────────────────────────────────
 
 export function exportXlsx(locations: Location[]): void {
-  const data = [HEADERS, ...locations.map(toRow)];
+  const data = [HEADERS, ...locations.map(toXlsxRow)];
   const ws = XLSX.utils.aoa_to_sheet(data);
 
   // Set column widths
