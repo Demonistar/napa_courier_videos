@@ -132,6 +132,7 @@ function buildMappedRow(
       address: get('address'),
       videoUrl: get('videoUrl') || null,
       imageUrl: get('imageUrl') || null,
+      imageUrls: [],
       instructions: get('instructions'),
       syncSource: 'csv_import',
       lastVerified: null,

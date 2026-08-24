@@ -10,8 +10,8 @@
 # What gets copied:
 #   • src/components/ui/       — shadcn/ui primitives (unchanged)
 #   • src/components/detail/   — LocationDetail, EmptyState (unchanged)
-#   • src/components/form/     — LocationForm (unchanged)
-#   • src/components/import/   — CsvImport (unchanged)
+#   • src/components/form/     — ComboboxField, DuplicateWarning, index.ts
+#     (unchanged) — LocationForm.tsx itself is Electron-only, see below
 #   • src/components/tree/     — LocationTree (unchanged)
 #   NOT copied (fully rewritten for Electron — different interfaces/exports):
 #   • src/components/tutorial/  — useTour.ts, TourOverlay.tsx
@@ -24,11 +24,27 @@
 #     electron-app/src/. Do not re-add this to the copy list — if TopBar
 #     ever needs to re-sync with the web app, do it as a one-time manual
 #     merge, not an automatic overwrite.
+#   • src/components/form/LocationForm.tsx — Electron-only (customer-lookup
+#     auto-fill/backfill by account number, imageUrls array from Generate
+#     Links). Found diverged from the web app copy the same night as the
+#     TopBar discovery above — same bug, different file: every CI build
+#     since the lookup auto-fill feature was added had been silently
+#     shipping the app WITHOUT it. Do not re-add to the copy list.
+#   • src/components/import/CsvImport.tsx — Electron-only as of the imageUrls
+#     field being added (8/17/2026). Was previously identical to the web app
+#     version, so this is a preventative exclusion, not a discovered bug —
+#     removing it now avoids starting the exact same clobbering pattern.
 #   • src/components/layout/HelpMenu.tsx — genuinely unchanged, still copied below
 #   • src/hooks/use-toast.ts   — unchanged
 #   • src/hooks/use-mobile.tsx — unchanged
 #   • src/lib/utils/           — csv.ts, fuzzy.ts (unchanged)
 #   • src/index.css            — Tailwind base + design tokens
+#
+# IMPORTANT: any time a new divergence like this is suspected, verify with
+#   diff -rq artifacts/napa-courier-admin/src/<path> electron-app/src/<path>
+# before assuming a file is still safe to auto-copy. Two of these were found
+# by that exact check on 8/17/2026 — don't assume the rest are still clean
+# just because the script's comments say "unchanged."
 #
 # Components already written for the Electron version (do NOT copy):
 #   • src/pages/AdminDashboard.tsx  — rewritten (async store, conflict dialog)
@@ -92,8 +108,13 @@ copy_dir "components/ui"
 echo ""
 echo "── Page Components ────────────────────────────────────────────────────"
 copy_dir "components/detail"
-copy_dir "components/form"
-copy_dir "components/import"
+# components/form/: only the pieces that are still genuinely shared.
+# LocationForm.tsx itself is Electron-only — see header comment above.
+copy_file "components/form/ComboboxField.tsx"
+copy_file "components/form/DuplicateWarning.tsx"
+copy_file "components/form/index.ts"
+# components/import/ is NOT copied — CsvImport.tsx is Electron-only as of
+# the imageUrls field. See header comment above.
 copy_dir "components/tree"
 # NOTE: components/tutorial/ is intentionally NOT copied.
 # Both useTour.ts and TourOverlay.tsx are fully rewritten for the Electron

@@ -167,7 +167,8 @@ export function GenerateLinksDialog({
   onSendToImport,
 }: GenerateLinksDialogProps) {
   const { toast } = useToast();
-  const [folderPath, setFolderPath] = useState('');
+  const DEFAULT_VIDEO_FOLDER = '/Delivery Optimization/Delivery Walk Through Videos/Completed and Labeled Videos';
+  const [folderPath, setFolderPath] = useState(DEFAULT_VIDEO_FOLDER);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [matched, setMatched] = useState<MatchedUpdate[]>([]);

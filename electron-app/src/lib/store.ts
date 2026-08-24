@@ -12,6 +12,12 @@ export interface Location {
   address: string;
   videoUrl: string | null;
   imageUrl: string | null;
+  /** Additional site photos discovered via Generate Links (Dropbox share-link
+   *  URLs, e.g. Street View / Map View). Separate from imageUrl, which stays
+   *  the single manually-uploaded photo (relative "images/<file>" path,
+   *  resolved via dropbox:downloadImage). imageUrls entries are share links,
+   *  rendered directly — never resolved through downloadImage. */
+  imageUrls: string[];
   instructions: string;
   syncSource: string | null;
   lastVerified: string | null;
@@ -192,9 +198,15 @@ export function useLocationStore() {
           );
         }
 
+        // Normalize imageUrls for records saved before this field existed —
+        // every existing location in production data lacks it entirely, so
+        // any code reading loc.imageUrls without this would crash on undefined.
+        const normalizeImages = (locs: Location[]) =>
+          locs.map((l) => (l.imageUrls ? l : { ...l, imageUrls: [] }));
+
         setAppState({
-          locations: effectiveLocations,
-          publishedLocations: liveData,
+          locations: normalizeImages(effectiveLocations),
+          publishedLocations: normalizeImages(liveData),
           auditLog: data.auditLog ?? [],
           currentUser: data.currentUser ?? 'Admin',
         });

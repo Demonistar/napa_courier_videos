@@ -158,6 +158,10 @@ export function LocationForm({
       address,
       videoUrl: videoUrl.trim() || null,
       imageUrl: imageUrl.trim() || null,
+      // Generate-Links-discovered photos aren't editable from this form yet —
+      // preserve whatever the location already had rather than wiping them
+      // out on every save. New locations simply start with none.
+      imageUrls: location?.imageUrls ?? [],
       instructions,
       syncSource: null,
       lastVerified: null,
@@ -174,6 +178,7 @@ export function LocationForm({
       address,
       videoUrl: videoUrl.trim() || null,
       imageUrl: imageUrl.trim() || null,
+      imageUrls: location?.imageUrls ?? [],
       instructions,
       syncSource: null,
       lastVerified: null,
