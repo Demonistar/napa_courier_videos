@@ -1089,6 +1089,18 @@ function registerIpcHandlers() {
     }
 
     try {
+      // Video extensions only — this tool is specifically for video links
+      // (see dialog title/copy). Without this filter, any file in the
+      // folder (images included) gets a shareable link generated and fed
+      // into the account-number matching below, which writes unconditionally
+      // to Location.videoUrl — an image matching by account number would
+      // silently overwrite that site's real video link.
+      const VIDEO_EXTENSIONS = new Set(['mov', 'mp4', 'm4v', 'avi', 'wmv', 'mkv']);
+      const isVideoFile = (name: string) => {
+        const ext = name.split('.').pop()?.toLowerCase() ?? '';
+        return VIDEO_EXTENSIONS.has(ext);
+      };
+
       // ── Step 1: collect all files in the folder (paginated) ──────────────
       const files: FileEntry[] = [];
       type ListData = {
@@ -1103,14 +1115,18 @@ function registerIpcHandlers() {
       }
       let page = await resp.json() as ListData;
       for (const e of page.entries) {
-        if (e['.tag'] === 'file') files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+        if (e['.tag'] === 'file' && isVideoFile(e.name)) {
+          files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+        }
       }
       while (page.has_more) {
         resp = await dbxApi('/files/list_folder/continue', { cursor: page.cursor });
         if (!resp.ok) break;
         page = await resp.json() as ListData;
         for (const e of page.entries) {
-          if (e['.tag'] === 'file') files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+          if (e['.tag'] === 'file' && isVideoFile(e.name)) {
+            files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+          }
         }
       }
 

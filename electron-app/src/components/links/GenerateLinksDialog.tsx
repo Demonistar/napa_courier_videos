@@ -81,6 +81,13 @@ export interface GenerateLinksDialogProps {
  * Fallback pattern — "###-NAME" (dash only, no spaces):
  *   "63-BMW-OF-NWA.mp4"        → { accountNumber: "63",       siteName: "BMW OF NWA" }
  *
+ * Bare-number fallback — filename is only the account number, nothing else
+ * (e.g. a technician just names the file after the account, no site name):
+ *   "318.jpg"                  → { accountNumber: "318",      siteName: ""           }
+ *   parsedSiteName is blank here — that's fine, matching against existing
+ *   locations happens by accountNumber alone; the location record itself
+ *   already has the site name.
+ *
  * Returns accountNumber as-is (preserving leading zeros) so it can be
  * compared directly against Location.accountNumber.
  */
@@ -105,6 +112,13 @@ function parseVideoFilename(name: string): { accountNumber: string; parsedSiteNa
       .replace(/\b\w/g, (c) => c.toUpperCase())
       .trim();
     return { accountNumber: dashMatch[1], parsedSiteName: siteName };
+  }
+
+  // Bare-number fallback: the whole filename (minus extension) is digits —
+  // treat that as the account number with no site name in the filename.
+  const bareMatch = base.match(/^(\d+)$/);
+  if (bareMatch) {
+    return { accountNumber: bareMatch[1], parsedSiteName: '' };
   }
 
   // No recognisable account number
