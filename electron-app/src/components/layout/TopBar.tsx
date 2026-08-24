@@ -80,7 +80,7 @@ export function TopBar({
   const pct = Math.max(0, Math.min(100, downloadProgress?.percent ?? 0));
   const dashOffset = RING_C * (1 - pct / 100);
   return (
-    <div className="h-16 border-b bg-card flex items-center px-6 gap-4 shrink-0">
+    <div className="min-h-16 border-b bg-card flex items-center px-6 py-2 gap-4 shrink-0 flex-wrap">
       {/* Brand */}
       <div className="flex items-center gap-2 shrink-0">
         <div className="w-1 h-8 bg-primary rounded-full" />
@@ -106,7 +106,7 @@ export function TopBar({
       </div>
 
       {/* Right side controls */}
-      <div className="flex items-center gap-2 ml-auto">
+      <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
         {/* Reauth warning */}
         {dropboxUser.connected && dropboxUser.needsReauth && (
           <Tooltip>
