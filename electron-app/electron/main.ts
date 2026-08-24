@@ -1083,22 +1083,26 @@ function registerIpcHandlers() {
    * large folders (100 + files).
    */
   ipcMain.handle('dropbox:generateLinks', async (_event, folderPath: string) => {
-    interface FileEntry { name: string; path_lower: string; path_display: string }
+    interface FileEntry { name: string; path_lower: string; path_display: string; mediaType: 'video' | 'image' }
     interface LinkResult {
-      name: string; path: string; url: string; reused: boolean; error?: string;
+      name: string; path: string; url: string; reused: boolean; mediaType: 'video' | 'image'; error?: string;
     }
 
     try {
-      // Video extensions only — this tool is specifically for video links
-      // (see dialog title/copy). Without this filter, any file in the
-      // folder (images included) gets a shareable link generated and fed
-      // into the account-number matching below, which writes unconditionally
-      // to Location.videoUrl — an image matching by account number would
-      // silently overwrite that site's real video link.
+      // Video AND image extensions — video files match by account number and
+      // overwrite Location.videoUrl (one video per site); image files match
+      // by account number and get APPENDED to Location.imageUrls (a site can
+      // have several — Street View, Map View, etc.). mediaType travels with
+      // each file through link generation so the renderer's matching logic
+      // (GenerateLinksDialog.tsx) can route each result correctly instead of
+      // ever writing an image's link into the video field or vice versa.
       const VIDEO_EXTENSIONS = new Set(['mov', 'mp4', 'm4v', 'avi', 'wmv', 'mkv']);
-      const isVideoFile = (name: string) => {
+      const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+      const mediaTypeOf = (name: string): 'video' | 'image' | null => {
         const ext = name.split('.').pop()?.toLowerCase() ?? '';
-        return VIDEO_EXTENSIONS.has(ext);
+        if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+        if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+        return null;
       };
 
       // ── Step 1: collect all files in the folder (paginated) ──────────────
@@ -1115,8 +1119,9 @@ function registerIpcHandlers() {
       }
       let page = await resp.json() as ListData;
       for (const e of page.entries) {
-        if (e['.tag'] === 'file' && isVideoFile(e.name)) {
-          files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+        const mediaType = e['.tag'] === 'file' ? mediaTypeOf(e.name) : null;
+        if (mediaType) {
+          files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display, mediaType });
         }
       }
       while (page.has_more) {
@@ -1124,8 +1129,9 @@ function registerIpcHandlers() {
         if (!resp.ok) break;
         page = await resp.json() as ListData;
         for (const e of page.entries) {
-          if (e['.tag'] === 'file' && isVideoFile(e.name)) {
-            files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display });
+          const mediaType = e['.tag'] === 'file' ? mediaTypeOf(e.name) : null;
+          if (mediaType) {
+            files.push({ name: e.name, path_lower: e.path_lower, path_display: e.path_display, mediaType });
           }
         }
       }
@@ -1142,7 +1148,7 @@ function registerIpcHandlers() {
           if (listResp.ok) {
             const listData = await listResp.json() as { links: Array<{ url: string }> };
             if (listData.links?.length > 0) {
-              return { name: file.name, path: file.path_display, url: listData.links[0].url, reused: true };
+              return { name: file.name, path: file.path_display, url: listData.links[0].url, reused: true, mediaType: file.mediaType };
             }
           }
 
@@ -1154,7 +1160,7 @@ function registerIpcHandlers() {
 
           if (createResp.ok) {
             const cd = await createResp.json() as { url: string };
-            return { name: file.name, path: file.path_display, url: cd.url, reused: false };
+            return { name: file.name, path: file.path_display, url: cd.url, reused: false, mediaType: file.mediaType };
           }
 
           if (createResp.status === 409) {
@@ -1164,13 +1170,13 @@ function registerIpcHandlers() {
             };
             if (ed?.error?.['.tag'] === 'shared_link_already_exists') {
               const existingUrl = ed.error!.metadata?.url;
-              if (existingUrl) return { name: file.name, path: file.path_display, url: existingUrl, reused: true };
+              if (existingUrl) return { name: file.name, path: file.path_display, url: existingUrl, reused: true, mediaType: file.mediaType };
               // Rare: metadata missing — list again
               const fl = await dbxApi('/sharing/list_shared_links', { path: file.path_lower });
               if (fl.ok) {
                 const fd = await fl.json() as { links: Array<{ url: string }> };
                 const url = fd.links?.[0]?.url ?? '';
-                return { name: file.name, path: file.path_display, url, reused: true };
+                return { name: file.name, path: file.path_display, url, reused: true, mediaType: file.mediaType };
               }
             }
           }
@@ -1181,10 +1187,10 @@ function registerIpcHandlers() {
             const parsed = JSON.parse(bodyText) as { error?: { '.tag'?: string }; error_summary?: string };
             reason = parsed.error_summary || parsed.error?.['.tag'] || bodyText;
           } catch { /* not JSON, use raw body text as-is */ }
-          return { name: file.name, path: file.path_display, url: '', reused: false,
+          return { name: file.name, path: file.path_display, url: '', reused: false, mediaType: file.mediaType,
             error: `HTTP ${createResp.status}: ${reason || 'no details returned'}` };
         } catch (err: unknown) {
-          return { name: file.name, path: file.path_display, url: '', reused: false,
+          return { name: file.name, path: file.path_display, url: '', reused: false, mediaType: file.mediaType,
             error: (err as Error).message };
         }
       };

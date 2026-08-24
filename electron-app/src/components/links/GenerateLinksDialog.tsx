@@ -35,6 +35,7 @@ interface RawResult {
   path: string;
   url: string;
   reused: boolean;
+  mediaType: 'video' | 'image';
   error?: string;
 }
 
@@ -46,10 +47,21 @@ export interface MatchedUpdate {
   newVideoUrl: string;
 }
 
+/** One location gaining one or more new photos (Generate-Links-discovered,
+ *  appended to imageUrls — never overwrites, never touches videoUrl). */
+export interface MatchedImageUpdate {
+  id: string;
+  accountNumber: string;
+  siteName: string;
+  existingImageUrls: string[];
+  newImageUrls: string[];
+}
+
 interface UnmatchedItem {
   name: string;
   parsedAccount: string;
   parsedSiteName: string;
+  mediaType: 'video' | 'image';
   url: string;
   error?: string;
 }
@@ -60,16 +72,37 @@ export interface GenerateLinksDialogProps {
   existingLocations: Location[];
   /**
    * Called when the admin confirms "Apply Updates".
-   * Each entry maps to one existing Location by id.
+   * videoUpdates maps to Location.videoUrl (one per location, overwrites).
+   * imageUpdates maps to Location.imageUrls (appends, never overwrites).
    * Caller should invoke store.updateLocation for each entry —
    * that handles audit trail, backup, and staging sync.
    */
-  onApplyUpdates: (updates: MatchedUpdate[]) => void;
+  onApplyUpdates: (videoUpdates: MatchedUpdate[], imageUpdates: MatchedImageUpdate[]) => void;
   /** Optional: send unmatched files to the import wizard. */
   onSendToImport?: (headers: string[], rows: Record<string, string>[]) => void;
 }
 
 // ─── Filename parser ──────────────────────────────────────────────────────────
+
+/**
+ * Parse an image filename into its account number. Images use a different
+ * convention from videos — underscore, not dash — because a site can have
+ * multiple photos (Street View, Map View) that all share the same account
+ * number prefix:
+ *   "318_1.jpg" → accountNumber: "318"   (everything before the first "_")
+ *   "318_2.jpg" → accountNumber: "318"
+ *   "318.jpg"   → accountNumber: "318"   (single photo, no suffix yet)
+ * Whatever comes after the "_" (or the whole name, for the bare case) is
+ * just a differentiator/handle — not parsed into anything meaningful.
+ */
+function parseImageFilename(name: string): { accountNumber: string } {
+  const base = name.replace(/\.[^.]+$/, '').trim();
+  const underscoreMatch = base.match(/^(\d+)_/);
+  if (underscoreMatch) return { accountNumber: underscoreMatch[1] };
+  const bareMatch = base.match(/^(\d+)$/);
+  if (bareMatch) return { accountNumber: bareMatch[1] };
+  return { accountNumber: '' };
+}
 
 /**
  * Parse a Dropbox video filename into { accountNumber, siteName }.
@@ -172,6 +205,7 @@ export function GenerateLinksDialog({
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [matched, setMatched] = useState<MatchedUpdate[]>([]);
+  const [matchedImages, setMatchedImages] = useState<MatchedImageUpdate[]>([]);
   const [unmatched, setUnmatched] = useState<UnmatchedItem[]>([]);
   const [scanErrors, setScanErrors] = useState<RawResult[]>([]);
   const [activeTab, setActiveTab] = useState<ReviewTab>('matched');
@@ -207,6 +241,7 @@ export function GenerateLinksDialog({
 
     setStatus('loading');
     setMatched([]);
+    setMatchedImages([]);
     setUnmatched([]);
     setScanErrors([]);
     setErrorMsg('');
@@ -235,9 +270,44 @@ export function GenerateLinksDialog({
       }
 
       const newMatched: MatchedUpdate[] = [];
+      // Grouped by location id — a site can have several new photos
+      // (318_1.jpg, 318_2.jpg) that all need to land in one imageUrls update.
+      const imageGroups = new Map<string, MatchedImageUpdate>();
       const newUnmatched: UnmatchedItem[] = [];
 
       for (const raw of good) {
+        if (raw.mediaType === 'image') {
+          const { accountNumber } = parseImageFilename(raw.name);
+          const loc = accountNumber
+            ? byAccount.get(normaliseAcct(accountNumber).toLowerCase())
+            : undefined;
+
+          if (loc) {
+            const existing = imageGroups.get(loc.id) ?? {
+              id: loc.id,
+              accountNumber: loc.accountNumber,
+              siteName: loc.siteName,
+              existingImageUrls: loc.imageUrls ?? [],
+              newImageUrls: [],
+            };
+            // Dedupe against both what the site already has and what's
+            // already queued from an earlier file in this same scan.
+            if (!existing.existingImageUrls.includes(raw.url) && !existing.newImageUrls.includes(raw.url)) {
+              existing.newImageUrls.push(raw.url);
+            }
+            imageGroups.set(loc.id, existing);
+          } else {
+            newUnmatched.push({
+              name: raw.name,
+              parsedAccount: accountNumber,
+              parsedSiteName: '',
+              mediaType: 'image',
+              url: raw.url,
+            });
+          }
+          continue;
+        }
+
         const { accountNumber, parsedSiteName } = parseVideoFilename(raw.name);
         const loc = accountNumber
           ? byAccount.get(normaliseAcct(accountNumber).toLowerCase())
@@ -256,17 +326,24 @@ export function GenerateLinksDialog({
             name: raw.name,
             parsedAccount: accountNumber,
             parsedSiteName,
+            mediaType: 'video',
             url: raw.url,
           });
         }
       }
 
+      // Groups where every photo was already present just resolve to zero
+      // new photos — nothing to apply, so drop them rather than show an
+      // empty "0 photos to add" row.
+      const newMatchedImages = [...imageGroups.values()].filter((g) => g.newImageUrls.length > 0);
+
       setMatched(newMatched);
+      setMatchedImages(newMatchedImages);
       setUnmatched(newUnmatched);
       // Land on whichever tab actually has something to show, in priority
       // order matched > unmatched > errors, so the admin isn't staring at
       // an empty table when e.g. every file failed to generate a link.
-      if (newMatched.length > 0) setActiveTab('matched');
+      if (newMatched.length > 0 || newMatchedImages.length > 0) setActiveTab('matched');
       else if (newUnmatched.length > 0) setActiveTab('unmatched');
       else setActiveTab('errors');
       setStatus('review');
@@ -277,9 +354,10 @@ export function GenerateLinksDialog({
   }, [folderPath, existingLocations]);
 
   const handleApply = () => {
-    if (matched.length === 0) return;
-    onApplyUpdates(matched);
-    setAppliedCount(matched.length);
+    if (matched.length === 0 && matchedImages.length === 0) return;
+    onApplyUpdates(matched, matchedImages);
+    const totalImages = matchedImages.reduce((sum, g) => sum + g.newImageUrls.length, 0);
+    setAppliedCount(matched.length + totalImages);
     setStatus('done');
   };
 
@@ -308,7 +386,8 @@ export function GenerateLinksDialog({
     handleClose(false);
   };
 
-  const totalFiles = matched.length + unmatched.length + scanErrors.length;
+  const totalMatchedImageFiles = matchedImages.reduce((sum, g) => sum + g.newImageUrls.length, 0);
+  const totalFiles = matched.length + totalMatchedImageFiles + unmatched.length + scanErrors.length;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -415,8 +494,14 @@ export function GenerateLinksDialog({
               <span className="text-muted-foreground">·</span>
               <Badge className="bg-blue-600 hover:bg-blue-600 gap-1">
                 <CheckCircle2 className="w-3 h-3" />
-                {matched.length} location{matched.length !== 1 ? 's' : ''} matched
+                {matched.length} video{matched.length !== 1 ? 's' : ''} matched
               </Badge>
+              {matchedImages.length > 0 && (
+                <Badge className="bg-green-600 hover:bg-green-600 gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  {totalMatchedImageFiles} photo{totalMatchedImageFiles !== 1 ? 's' : ''} matched ({matchedImages.length} location{matchedImages.length !== 1 ? 's' : ''})
+                </Badge>
+              )}
               {unmatched.length > 0 && (
                 <Badge variant="outline" className="gap-1 text-amber-700 border-amber-400">
                   <AlertTriangle className="w-3 h-3" />
@@ -440,7 +525,7 @@ export function GenerateLinksDialog({
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                 }`}
               >
-                Matched ({matched.length})
+                Matched ({matched.length + matchedImages.length})
               </button>
               <button
                 onClick={() => setActiveTab('unmatched')}
@@ -469,7 +554,7 @@ export function GenerateLinksDialog({
             {/* ── Matched tab ─────────────────────────────────────────── */}
             {activeTab === 'matched' && (
               <>
-                {matched.length === 0 ? (
+                {matched.length === 0 && matchedImages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
                     <AlertTriangle className="w-8 h-8 text-muted-foreground" />
                     <p className="text-sm font-medium">No locations matched</p>
@@ -482,6 +567,8 @@ export function GenerateLinksDialog({
                 ) : (
                   <ScrollArea className="flex-1 border rounded-md">
                     <div className="divide-y text-sm">
+                      {matched.length > 0 && (
+                      <>
                       {/* Header row */}
                       <div className="grid grid-cols-[1fr_2fr_2fr] gap-3 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
                         <span>Account / Site</span>
@@ -535,6 +622,40 @@ export function GenerateLinksDialog({
                           </div>
                         </div>
                       ))}
+                      </>
+                      )}
+
+                      {matchedImages.length > 0 && (
+                      <>
+                      {/* Photo matches — appended to imageUrls, not a before/after
+                          overwrite like video, so they get their own simpler layout. */}
+                      <div className="grid grid-cols-[1fr_2fr] gap-3 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span>Account / Site</span>
+                        <span>Photos to add</span>
+                      </div>
+
+                      {matchedImages.map((g) => (
+                        <div key={g.id} className="grid grid-cols-[1fr_2fr] gap-3 px-3 py-2.5 items-start">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{g.siteName}</p>
+                            <p className="text-xs text-muted-foreground font-mono">
+                              #{g.accountNumber}
+                            </p>
+                          </div>
+                          <div className="min-w-0 pt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <Badge className="bg-green-600 hover:bg-green-600 gap-1">
+                              +{g.newImageUrls.length} photo{g.newImageUrls.length !== 1 ? 's' : ''}
+                            </Badge>
+                            {g.existingImageUrls.length > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                ({g.existingImageUrls.length} already on file)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      </>
+                      )}
                     </div>
                   </ScrollArea>
                 )}

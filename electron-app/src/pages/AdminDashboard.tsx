@@ -639,10 +639,19 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         open={generateLinksOpen}
         onOpenChange={setGenerateLinksOpen}
         existingLocations={state.locations}
-        onApplyUpdates={(updates) => {
+        onApplyUpdates={(updates, imageUpdates) => {
           updates.forEach((u) => updateLocation(u.id, { videoUrl: u.newVideoUrl }));
+          imageUpdates.forEach((g) =>
+            updateLocation(g.id, { imageUrls: [...g.existingImageUrls, ...g.newImageUrls] }),
+          );
+
+          const totalImages = imageUpdates.reduce((sum, g) => sum + g.newImageUrls.length, 0);
+          const parts: string[] = [];
+          if (updates.length > 0) parts.push(`${updates.length} video link${updates.length !== 1 ? 's' : ''}`);
+          if (totalImages > 0) parts.push(`${totalImages} photo${totalImages !== 1 ? 's' : ''}`);
+
           toast({
-            title: `${updates.length} video link${updates.length !== 1 ? 's' : ''} updated`,
+            title: `${parts.join(' and ')} updated`,
             description: 'Changes are staged and ready to publish.',
           });
         }}
