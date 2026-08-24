@@ -15,7 +15,16 @@
 #   • src/components/tree/     — LocationTree (unchanged)
 #   NOT copied (fully rewritten for Electron — different interfaces/exports):
 #   • src/components/tutorial/  — useTour.ts, TourOverlay.tsx
-#   • src/components/layout/   — TopBar, HelpMenu (unchanged)
+#   • src/components/layout/TopBar.tsx — Electron-only (Generate Links,
+#     Backfill Addresses, Sync Now, update-progress ring, Dropbox status —
+#     none of which exist in the web app version). This file was copied here
+#     up through 8/17/2026, which silently overwrote every Electron-only
+#     TopBar feature on every CI build without anyone noticing until a
+#     released version was missing buttons that definitely existed in
+#     electron-app/src/. Do not re-add this to the copy list — if TopBar
+#     ever needs to re-sync with the web app, do it as a one-time manual
+#     merge, not an automatic overwrite.
+#   • src/components/layout/HelpMenu.tsx — genuinely unchanged, still copied below
 #   • src/hooks/use-toast.ts   — unchanged
 #   • src/hooks/use-mobile.tsx — unchanged
 #   • src/lib/utils/           — csv.ts, fuzzy.ts (unchanged)
@@ -92,10 +101,10 @@ copy_dir "components/tree"
 # The versions already in electron-app/src/components/tutorial/ are correct.
 
 echo ""
-echo "── Layout (TopBar + HelpMenu) ─────────────────────────────────────────"
-copy_file "components/layout/TopBar.tsx"
+echo "── Layout (HelpMenu only — TopBar.tsx is Electron-only, not synced) ────"
 copy_file "components/layout/HelpMenu.tsx"
-# Note: We do NOT copy SettingsPanel.tsx — the Electron version is already present.
+# Note: We do NOT copy TopBar.tsx (diverged — see header comment above) or
+# SettingsPanel.tsx — the Electron versions are already present.
 
 echo ""
 echo "── Hooks ──────────────────────────────────────────────────────────────"
