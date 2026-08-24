@@ -69,6 +69,13 @@ const api = {
       updates: { address?: string; city?: string; state?: string },
     ): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('data:upsertLookupEntry', accountNumber, updates),
+    seedLookupFromBundle: (): Promise<{
+      ok: boolean;
+      added?: number;
+      alreadyPresent?: number;
+      totalInSeed?: number;
+      error?: string;
+    }> => ipcRenderer.invoke('data:seedLookupFromBundle'),
   },
 
   settings: {

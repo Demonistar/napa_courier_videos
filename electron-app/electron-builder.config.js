@@ -46,6 +46,15 @@ const config = {
     '!out/**/*.map',
   ],
 
+  // Ships the customer lookup seed data (3,144 accounts, built from Craig's
+  // customer export) inside every installer, so every admin's install has
+  // the same data available — no one manually sources or manages this file.
+  // Lands in <install-dir>/resources/customer-lookup-seed.json at runtime,
+  // read via process.resourcesPath (see loadSeedLookup in main.ts).
+  extraResources: [
+    { from: 'resources/customer-lookup-seed.json', to: 'customer-lookup-seed.json' },
+  ],
+
   // ── Windows ────────────────────────────────────────────────────────────────
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],

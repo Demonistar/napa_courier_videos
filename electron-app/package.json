@@ -1,6 +1,6 @@
 {
   "name": "napa-courier-admin",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "NAPA Courier Admin — Desktop location management tool",
   "main": "out/main/main.js",
   "author": "NAPA Courier",

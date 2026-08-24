@@ -613,6 +613,56 @@ async function upsertLookupEntry(
   );
 }
 
+/**
+ * Path to the customer lookup seed data bundled inside this install (see
+ * extraResources in electron-builder.config.js). Same file for every admin's
+ * install — nobody sources, edits, or uploads this by hand.
+ */
+function seedLookupPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'customer-lookup-seed.json');
+  }
+  // Dev mode (npm run dev): resources/ lives at the project root, a sibling
+  // of electron/ and out/ — not under process.resourcesPath, which only
+  // exists for a packaged build.
+  return path.join(__dirname, '..', '..', 'resources', 'customer-lookup-seed.json');
+}
+
+/**
+ * Merges the bundled seed data into whatever's currently in Dropbox.
+ * Deliberately a merge, never an overwrite: any account number already
+ * present in the live lookup — whether from a prior seed, a manual save, or
+ * a Generate-Links image match — keeps its existing entry untouched. Only
+ * account numbers genuinely missing from the live lookup get added from the
+ * seed. This is what makes it safe to run more than once, and safe to run
+ * from any admin's install without risk of clobbering another admin's data.
+ */
+async function seedLookupFromBundle(folder: string): Promise<{ added: number; alreadyPresent: number; totalInSeed: number }> {
+  const seedRaw = fs.readFileSync(seedLookupPath(), 'utf-8');
+  const seed = JSON.parse(seedRaw) as Record<string, LookupEntry>;
+  const live = await loadLookupFile(folder);
+
+  let added = 0;
+  let alreadyPresent = 0;
+  for (const [accountNumber, entry] of Object.entries(seed)) {
+    if (live[accountNumber]) {
+      alreadyPresent++;
+      continue;
+    }
+    live[accountNumber] = entry;
+    added++;
+  }
+
+  if (added > 0) {
+    await dbxUpload(
+      folderPath(folder, 'customer-lookup.json'),
+      JSON.stringify(live, null, 2),
+    );
+  }
+
+  return { added, alreadyPresent, totalInSeed: Object.keys(seed).length };
+}
+
 const MAX_BACKUPS = 20;
 
 async function listBackups(folder: string): Promise<Array<{ id: string; label: string; timestamp: string; locationId: string | null; locationName: string | null; dropboxPath: string }>> {
@@ -819,6 +869,16 @@ function registerIpcHandlers() {
       }
     },
   );
+
+  ipcMain.handle('data:seedLookupFromBundle', async () => {
+    const { dropboxFolderPath } = loadSettings();
+    try {
+      const result = await seedLookupFromBundle(dropboxFolderPath);
+      return { ok: true, ...result };
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
 
   // ── Settings ──────────────────────────────────────────────────────────────
 

@@ -90,6 +90,30 @@ export function SettingsPanel({
   const [folderSaved, setFolderSaved] = useState(false);
   const [folderTesting, setFolderTesting] = useState(false);
   const [folderTestResult, setFolderTestResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null);
+  const [seeding, setSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handleSeedLookup = async () => {
+    setSeeding(true);
+    setSeedResult(null);
+    try {
+      const res = await window.electronAPI.data.seedLookupFromBundle();
+      if (res.ok) {
+        setSeedResult({
+          ok: true,
+          message: res.added! > 0
+            ? `Added ${res.added} new account${res.added !== 1 ? 's' : ''} (${res.alreadyPresent} already on file, ${res.totalInSeed} total in the bundled dataset).`
+            : `Nothing to add — all ${res.totalInSeed} accounts in the bundled dataset are already in the live lookup.`,
+        });
+      } else {
+        setSeedResult({ ok: false, message: res.error ?? 'Could not seed the customer lookup.' });
+      }
+    } catch (err) {
+      setSeedResult({ ok: false, message: (err as Error).message });
+    } finally {
+      setSeeding(false);
+    }
+  };
   const [localUser, setLocalUser] = useState(currentUser);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>('light');
@@ -519,6 +543,42 @@ export function SettingsPanel({
                 <code className="font-mono text-xs">NAPA Admin Data/</code> subfolder at
                 this path. Changes take effect on next data reload.
               </p>
+            </section>
+
+            {/* ── Customer Lookup seed ─────────────────────────────── */}
+            <section className="space-y-2">
+              <Label className="text-sm font-semibold">Customer Lookup Data</Label>
+              <p className="text-xs text-muted-foreground">
+                Loads the bundled customer address dataset into the shared lookup used by
+                account-number auto-fill and Backfill Addresses. Safe to run more than
+                once, from any install — it only adds account numbers that aren't already
+                in the live lookup, never overwrites an existing entry.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleSeedLookup()}
+                disabled={seeding}
+                className="gap-1.5"
+              >
+                {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Load Customer Lookup Data
+              </Button>
+              {seedResult && (
+                <div
+                  className={[
+                    'flex items-start gap-2 p-2.5 rounded-md text-xs',
+                    seedResult.ok
+                      ? 'border border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900 text-green-800 dark:text-green-300'
+                      : 'border border-destructive/30 bg-destructive/5 text-destructive',
+                  ].join(' ')}
+                >
+                  {seedResult.ok
+                    ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
+                  <span>{seedResult.message}</span>
+                </div>
+              )}
             </section>
 
             {/* ── Display Name override ──────────────────────────── */}

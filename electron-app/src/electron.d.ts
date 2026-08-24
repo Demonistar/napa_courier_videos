@@ -63,6 +63,13 @@ declare global {
           accountNumber: string,
           updates: { address?: string; city?: string; state?: string },
         ): Promise<{ ok: boolean; error?: string }>;
+        seedLookupFromBundle(): Promise<{
+          ok: boolean;
+          added?: number;
+          alreadyPresent?: number;
+          totalInSeed?: number;
+          error?: string;
+        }>;
       };
       settings: {
         get(): Promise<AppSettings>;
