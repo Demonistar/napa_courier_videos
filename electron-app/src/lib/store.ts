@@ -113,6 +113,26 @@ function esc(val: string | null | undefined): string {
     : s;
 }
 
+/**
+ * Formats an account number for CSV as a genuine unquoted integer whenever
+ * that's safe — i.e. the value round-trips cleanly (no leading zeros, no
+ * non-digit characters, nothing lost converting to a number and back).
+ * Excel then reads it as a real number instead of text.
+ *
+ * Falls back to the plain escaped text for anything that wouldn't round-trip
+ * cleanly (leading zeros like "00123456", non-numeric account numbers) —
+ * exporting those as a number would silently corrupt them (Excel strips
+ * leading zeros from real numbers), so text is the correct, safe fallback,
+ * not a bug.
+ */
+function escAcct(val: string | null | undefined): string {
+  const s = (val ?? '').trim();
+  if (s !== '' && /^\d+$/.test(s) && String(Number(s)) === s) {
+    return s; // safe to emit unquoted — Excel will read this as a number
+  }
+  return esc(val);
+}
+
 // ─── Store hook ────────────────────────────────────────────────────────────────
 
 const INITIAL_STATE: AppState = {
@@ -686,7 +706,21 @@ export function useLocationStore() {
 
   const exportData = useCallback(() => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    const json = JSON.stringify({ exportedAt: new Date().toISOString(), state: appState }, null, 2);
+    // Emit accountNumber as a real JSON number when it round-trips cleanly
+    // (same rule as escAcct for CSV) — the in-memory Location objects keep
+    // accountNumber as a string throughout the rest of the app; this
+    // replacer only affects what gets written to the exported file.
+    const json = JSON.stringify(
+      { exportedAt: new Date().toISOString(), state: appState },
+      (key, value) => {
+        if (key === 'accountNumber' && typeof value === 'string') {
+          const s = value.trim();
+          if (s !== '' && /^\d+$/.test(s) && String(Number(s)) === s) return Number(s);
+        }
+        return value;
+      },
+      2,
+    );
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -698,7 +732,7 @@ export function useLocationStore() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const headers = ['Site Name', 'Account Number', 'State', 'City', 'Address', 'Instructions', 'Video URL', 'Image URL'];
     const rows = appState.locations.map((loc) =>
-      [esc(loc.siteName), esc(loc.accountNumber), esc(loc.state), esc(loc.city),
+      [esc(loc.siteName), escAcct(loc.accountNumber), esc(loc.state), esc(loc.city),
        esc(loc.address), esc(loc.instructions), esc(loc.videoUrl), esc(loc.imageUrl)].join(','),
     );
     const csv = [headers.join(','), ...rows].join('\n');

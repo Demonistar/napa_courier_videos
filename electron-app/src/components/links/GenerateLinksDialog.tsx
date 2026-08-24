@@ -174,15 +174,26 @@ function esc(v: string) {
     : v;
 }
 
+// Same rule as store.ts's escAcct: emit a genuine unquoted number when the
+// account number round-trips cleanly, so Excel reads it as a real number
+// instead of text. Falls back to escaped text for anything with leading
+// zeros or non-digit characters, where converting to a number would
+// silently corrupt the value.
+function escAcct(v: string) {
+  const s = v.trim();
+  if (s !== '' && /^\d+$/.test(s) && String(Number(s)) === s) return s;
+  return esc(v);
+}
+
 function buildCsv(matched: MatchedUpdate[], unmatched: UnmatchedItem[]): string {
   const header = 'Account Number,Site Name,Old Video URL,New Video URL,Status';
   const mRows = matched.map((r) =>
-    [esc(r.accountNumber), esc(r.siteName), esc(r.oldVideoUrl ?? ''), esc(r.newVideoUrl), 'matched'].join(','),
+    [escAcct(r.accountNumber), esc(r.siteName), esc(r.oldVideoUrl ?? ''), esc(r.newVideoUrl), 'matched'].join(','),
   );
   const uRows = unmatched
     .filter((r) => r.url)
     .map((r) =>
-      [esc(r.parsedAccount), esc(r.parsedSiteName), '', esc(r.url), 'unmatched'].join(','),
+      [escAcct(r.parsedAccount), esc(r.parsedSiteName), '', esc(r.url), 'unmatched'].join(','),
     );
   return [header, ...mRows, ...uRows].join('\n');
 }
