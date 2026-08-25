@@ -646,11 +646,18 @@ async function seedLookupFromBundle(folder: string): Promise<{ added: number; al
   const seed = JSON.parse(seedRaw) as Record<string, LookupEntry>;
   const live = await loadLookupFile(folder);
 
+  // A state value is only "good" if it's a real 2-letter code. A spelled-out
+  // name like "Arkansas" (written in by hand through the form at some point,
+  // then auto-saved into the lookup by the per-save sync) doesn't count as
+  // already having a correct value — it gets corrected from the seed's clean
+  // 2-letter data, same as a genuinely blank field would.
+  const isGoodState = (s: string | undefined) => !!s && s.trim().length === 2;
+
   let added = 0;
   let alreadyPresent = 0;
   for (const [accountNumber, seedEntry] of Object.entries(seed)) {
     const existing = live[accountNumber];
-    const fullyPresent = !!(existing?.address && existing?.city && existing?.state);
+    const fullyPresent = !!(existing?.address && existing?.city && isGoodState(existing?.state));
     if (fullyPresent) {
       alreadyPresent++;
       continue;
@@ -659,7 +666,7 @@ async function seedLookupFromBundle(folder: string): Promise<{ added: number; al
     const merged: LookupEntry = { ...existing };
     if (!merged.address && seedEntry.address) merged.address = seedEntry.address;
     if (!merged.city && seedEntry.city) merged.city = seedEntry.city;
-    if (!merged.state && seedEntry.state) merged.state = seedEntry.state;
+    if (!isGoodState(merged.state) && seedEntry.state) merged.state = seedEntry.state;
     if (!merged.customerName && seedEntry.customerName) merged.customerName = seedEntry.customerName;
     if (!merged.postalCode && seedEntry.postalCode) merged.postalCode = seedEntry.postalCode;
     if (!merged.address2 && seedEntry.address2) merged.address2 = seedEntry.address2;
