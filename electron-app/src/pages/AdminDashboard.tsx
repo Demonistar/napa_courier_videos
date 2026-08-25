@@ -153,7 +153,20 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     siteName: string,
   ): Promise<string> => {
     const buf = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    // Convert to base64 in chunks — spreading the whole byte array into a
+    // single String.fromCharCode(...) call throws "Maximum call stack size
+    // exceeded" for any realistic photo (a phone JPG is typically several
+    // MB; the failure threshold is roughly 65-100KB depending on the JS
+    // engine). This is why uploads never actually worked for a real photo,
+    // only for tiny test images. Chunking at 32KB stays safely under every
+    // engine's argument-count limit for a single function call.
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const CHUNK_SIZE = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK_SIZE)));
+    }
+    const base64 = btoa(binary);
     const ext = file.name.split('.').pop() ?? 'png';
     // Build the filename using the values the admin has typed so far.
     // Sanitise: uppercase, spaces→dashes, strip non-alphanumeric.
