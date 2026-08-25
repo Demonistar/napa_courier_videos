@@ -337,6 +337,35 @@ export function LocationForm({
                   </button>
                 )}
               </div>
+
+              {/* Additional photos discovered via Generate Links (Street View,
+                  Map View, etc.) — separate from the single manually-uploaded
+                  image above. These are Dropbox share-link URLs, rendered
+                  directly (never resolved through dropbox:downloadImage, that
+                  path is only for the relative-path manual upload). Read-only
+                  here — editing/removing individual photos isn't built yet;
+                  re-running Generate Links is how new ones get added. */}
+              {location?.imageUrls && location.imageUrls.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    {location.imageUrls.length} additional photo{location.imageUrls.length !== 1 ? 's' : ''} from Generate Links
+                  </p>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {location.imageUrls.map((url) => (
+                      <a
+                        key={url}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block aspect-square rounded-md overflow-hidden border bg-muted hover:opacity-80 transition-opacity"
+                        title="Open full size"
+                      >
+                        <img src={url} alt="Additional site photo" className="w-full h-full object-cover" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
