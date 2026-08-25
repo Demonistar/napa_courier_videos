@@ -629,16 +629,17 @@ function seedLookupPath(): string {
 }
 
 /**
- * Merges the bundled seed data into whatever's currently in Dropbox.
- * A genuinely new account number gets added outright. An account number
- * that already exists but has no real address data yet — a stub entry,
- * e.g. one created by the per-save sync before any address was ever typed —
- * gets filled in from the seed too, since "the key exists" isn't the same
- * as "this entry already has useful data." Only an entry that already has
- * real address/city/state data is left untouched, protecting any manual
- * correction an admin has made. This is what makes it safe to run more than
- * once, and safe to run from any admin's install without risk of clobbering
- * another admin's data.
+ * Merges the bundled seed data into whatever's currently in Dropbox,
+ * field by field — not all-or-nothing per account. A genuinely new account
+ * number gets added outright. An account number that already exists but is
+ * only partially filled in (e.g. city got saved by the per-save sync at
+ * some point but address never did) gets exactly the missing fields filled
+ * in from the seed; any field that already has a real value is left
+ * completely untouched, protecting a manual correction. Only an account
+ * whose address, city, AND state are all already populated counts as
+ * "already present" and is skipped outright. This is what makes it safe to
+ * run more than once, and safe to run from any admin's install without risk
+ * of clobbering another admin's data.
  */
 async function seedLookupFromBundle(folder: string): Promise<{ added: number; alreadyPresent: number; totalInSeed: number }> {
   const seedRaw = fs.readFileSync(seedLookupPath(), 'utf-8');
@@ -649,15 +650,21 @@ async function seedLookupFromBundle(folder: string): Promise<{ added: number; al
   let alreadyPresent = 0;
   for (const [accountNumber, seedEntry] of Object.entries(seed)) {
     const existing = live[accountNumber];
-    const hasRealData = !!(existing?.address || existing?.city || existing?.state);
-    if (hasRealData) {
+    const fullyPresent = !!(existing?.address && existing?.city && existing?.state);
+    if (fullyPresent) {
       alreadyPresent++;
       continue;
     }
-    // No entry at all, or a stub with no real address data — fill it in.
-    // Spreading existing first preserves any other field (e.g. customerName)
-    // that might already be set, while seedEntry supplies the missing data.
-    live[accountNumber] = { ...existing, ...seedEntry };
+
+    const merged: LookupEntry = { ...existing };
+    if (!merged.address && seedEntry.address) merged.address = seedEntry.address;
+    if (!merged.city && seedEntry.city) merged.city = seedEntry.city;
+    if (!merged.state && seedEntry.state) merged.state = seedEntry.state;
+    if (!merged.customerName && seedEntry.customerName) merged.customerName = seedEntry.customerName;
+    if (!merged.postalCode && seedEntry.postalCode) merged.postalCode = seedEntry.postalCode;
+    if (!merged.address2 && seedEntry.address2) merged.address2 = seedEntry.address2;
+
+    live[accountNumber] = merged;
     added++;
   }
 
