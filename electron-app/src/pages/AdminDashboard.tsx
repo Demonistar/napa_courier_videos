@@ -622,6 +622,13 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
         onCurrentUserChange={setCurrentUser}
         updateReady={updateReady}
         downloadProgress={downloadProgress}
+        onLookupSeeded={() => {
+          void reload();
+          toast({
+            title: 'Lookup reloaded',
+            description: 'Address auto-fill and Backfill Addresses now have the updated data.',
+          });
+        }}
       />
 
       {/* Backup & Restore */}

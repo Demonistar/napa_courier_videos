@@ -55,6 +55,11 @@ interface SettingsPanelProps {
   onCurrentUserChange: (name: string) => void;
   updateReady?: boolean;
   downloadProgress?: DownloadProgress | null;
+  /** Called after a successful lookup seed so the caller can reload the
+   *  app's in-memory lookup state — writing to Dropbox alone doesn't update
+   *  what's already loaded in memory, which is what Backfill Addresses and
+   *  the account-number auto-fill actually read from. */
+  onLookupSeeded?: () => void;
 }
 
 type Theme = 'light' | 'dark' | 'system';
@@ -85,6 +90,7 @@ export function SettingsPanel({
   onCurrentUserChange,
   updateReady = false,
   downloadProgress = null,
+  onLookupSeeded,
 }: SettingsPanelProps) {
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
@@ -105,6 +111,7 @@ export function SettingsPanel({
             ? `Added ${res.added} new account${res.added !== 1 ? 's' : ''} (${res.alreadyPresent} already on file, ${res.totalInSeed} total in the bundled dataset).`
             : `Nothing to add — all ${res.totalInSeed} accounts in the bundled dataset are already in the live lookup.`,
         });
+        if (res.added! > 0) onLookupSeeded?.();
       } else {
         setSeedResult({ ok: false, message: res.error ?? 'Could not seed the customer lookup.' });
       }
