@@ -630,12 +630,15 @@ function seedLookupPath(): string {
 
 /**
  * Merges the bundled seed data into whatever's currently in Dropbox.
- * Deliberately a merge, never an overwrite: any account number already
- * present in the live lookup — whether from a prior seed, a manual save, or
- * a Generate-Links image match — keeps its existing entry untouched. Only
- * account numbers genuinely missing from the live lookup get added from the
- * seed. This is what makes it safe to run more than once, and safe to run
- * from any admin's install without risk of clobbering another admin's data.
+ * A genuinely new account number gets added outright. An account number
+ * that already exists but has no real address data yet — a stub entry,
+ * e.g. one created by the per-save sync before any address was ever typed —
+ * gets filled in from the seed too, since "the key exists" isn't the same
+ * as "this entry already has useful data." Only an entry that already has
+ * real address/city/state data is left untouched, protecting any manual
+ * correction an admin has made. This is what makes it safe to run more than
+ * once, and safe to run from any admin's install without risk of clobbering
+ * another admin's data.
  */
 async function seedLookupFromBundle(folder: string): Promise<{ added: number; alreadyPresent: number; totalInSeed: number }> {
   const seedRaw = fs.readFileSync(seedLookupPath(), 'utf-8');
@@ -644,12 +647,17 @@ async function seedLookupFromBundle(folder: string): Promise<{ added: number; al
 
   let added = 0;
   let alreadyPresent = 0;
-  for (const [accountNumber, entry] of Object.entries(seed)) {
-    if (live[accountNumber]) {
+  for (const [accountNumber, seedEntry] of Object.entries(seed)) {
+    const existing = live[accountNumber];
+    const hasRealData = !!(existing?.address || existing?.city || existing?.state);
+    if (hasRealData) {
       alreadyPresent++;
       continue;
     }
-    live[accountNumber] = entry;
+    // No entry at all, or a stub with no real address data — fill it in.
+    // Spreading existing first preserves any other field (e.g. customerName)
+    // that might already be set, while seedEntry supplies the missing data.
+    live[accountNumber] = { ...existing, ...seedEntry };
     added++;
   }
 
