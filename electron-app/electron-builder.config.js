@@ -144,6 +144,14 @@ const config = {
     provider: 'github',
     owner:    'Demonistar',
     repo:     'napa_courier_videos',
+    // Explicit, not left to electron-builder's default — newer versions
+    // (26.x, e.g. what a locally-run Mac build might have) default this
+    // differently than the 25.x CI uses, which caused a real failure: a
+    // release already existed as "release" from Windows' CI build, and the
+    // local Mac run defaulted to "draft," which electron-builder correctly
+    // refused to reconcile with the existing published release rather than
+    // silently changing its state.
+    releaseType: 'release',
   },
 };
 
