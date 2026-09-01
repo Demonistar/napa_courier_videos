@@ -55,6 +55,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
     pendingChangesCount,
     lookup,
     backfillAddressesFromLookup,
+    fixCityStateCasing,
     addLocation,
     updateLocation,
     deleteLocation,
@@ -642,6 +643,7 @@ export default function AdminDashboard({ onLogout, initialUser }: AdminDashboard
             description: 'Address auto-fill and Backfill Addresses now have the updated data.',
           });
         }}
+        onFixCityStateCasing={fixCityStateCasing}
       />
 
       {/* Backup & Restore */}

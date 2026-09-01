@@ -60,6 +60,9 @@ interface SettingsPanelProps {
    *  what's already loaded in memory, which is what Backfill Addresses and
    *  the account-number auto-fill actually read from. */
   onLookupSeeded?: () => void;
+  /** Runs the one-time city/state capitalization cleanup and returns how
+   *  many locations changed, so this panel can show the result. */
+  onFixCityStateCasing?: () => { updated: number };
 }
 
 type Theme = 'light' | 'dark' | 'system';
@@ -91,6 +94,7 @@ export function SettingsPanel({
   updateReady = false,
   downloadProgress = null,
   onLookupSeeded,
+  onFixCityStateCasing,
 }: SettingsPanelProps) {
   const [folderPath, setFolderPath] = useState('');
   const [folderSaved, setFolderSaved] = useState(false);
@@ -98,6 +102,12 @@ export function SettingsPanel({
   const [folderTestResult, setFolderTestResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [seedResult, setSeedResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [casingResult, setCasingResult] = useState<{ updated: number } | null>(null);
+
+  const handleFixCityStateCasing = () => {
+    const result = onFixCityStateCasing?.();
+    if (result) setCasingResult(result);
+  };
 
   const handleSeedLookup = async () => {
     setSeeding(true);
@@ -584,6 +594,37 @@ export function SettingsPanel({
                     ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
                   <span>{seedResult.message}</span>
+                </div>
+              )}
+            </section>
+
+            {/* ── City/State capitalization cleanup ───────────────────── */}
+            <section className="space-y-2">
+              <Label className="text-sm font-semibold">City/State Capitalization</Label>
+              <p className="text-xs text-muted-foreground">
+                Fixes existing locations where the same city was saved with different
+                capitalization (e.g. "BENTONVILLE" vs "Bentonville") — the location tree
+                treats those as two different cities until this runs. New saves are
+                corrected automatically going forward; this is a one-time cleanup for
+                what's already there. Safe to run more than once.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleFixCityStateCasing}
+                className="gap-1.5"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Fix City/State Capitalization
+              </Button>
+              {casingResult && (
+                <div className="flex items-start gap-2 p-2.5 rounded-md text-xs border border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900 text-green-800 dark:text-green-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    {casingResult.updated > 0
+                      ? `Fixed ${casingResult.updated} location${casingResult.updated !== 1 ? 's' : ''}.`
+                      : 'Nothing to fix — all city/state values are already correctly capitalized.'}
+                  </span>
                 </div>
               )}
             </section>

@@ -63,6 +63,22 @@ function normalizeStateAbbr(raw: string): string {
   return mapped ?? trimmed; // unrecognized value — leave as typed rather than guess
 }
 
+/**
+ * Title-cases a city name so "BENTONVILLE", "bentonville", and "Bentonville"
+ * all become the exact same string — without this, they're three different
+ * keys in the location tree's city grouping (which groups by the raw string,
+ * see LocationTree.tsx), so the same city shows up as separate tree nodes.
+ * Handles apostrophes and hyphens reasonably (O'Fallon, Winston-Salem)
+ * without needing a lookup table of every real-world city name.
+ */
+function titleCaseCity(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/'(\w)/g, (_, c) => `'${c.toUpperCase()}`); // O'fallon → O'Fallon
+}
+
 export interface AuditEntry {
   id: string;
   locationId: string;
@@ -440,12 +456,64 @@ export function useLocationStore() {
     return { updated, skipped };
   }, [appState, lookup, pushBackup, scheduleSync]);
 
+  /**
+   * One-time cleanup for locations saved before city/state normalization
+   * existed — e.g. a location with city "BENTONVILLE" sitting alongside
+   * others with "Bentonville", which the location tree treats as two
+   * separate cities since it groups by the raw string. Going forward,
+   * addLocation/updateLocation normalize automatically; this fixes what's
+   * already there. Only touches records whose normalized value actually
+   * differs from what's stored — never rewrites something already correct.
+   */
+  const fixCityStateCasing = useCallback((): { updated: number } => {
+    let updated = 0;
+    const now = new Date().toISOString();
+    const newAuditEntries: AuditEntry[] = [];
+
+    const nextLocations = appState.locations.map((loc) => {
+      const fixedCity = titleCaseCity(loc.city);
+      const fixedState = normalizeStateAbbr(loc.state);
+      if (fixedCity === loc.city && fixedState === loc.state) return loc;
+
+      const next: Location = { ...loc, city: fixedCity, state: fixedState, updatedAt: now };
+      newAuditEntries.push(
+        createAuditEntry(loc.id, 'update', buildLocationDiff(loc, next), appState.currentUser),
+      );
+      updated++;
+      return next;
+    });
+
+    if (updated > 0) {
+      setAppState((prev) => {
+        pushBackup(
+          `Fixed city/state capitalization (${updated} location${updated !== 1 ? 's' : ''})`,
+          prev,
+          null,
+          null,
+        );
+        const next = { ...prev, locations: nextLocations, auditLog: [...prev.auditLog, ...newAuditEntries] };
+        scheduleSync(next);
+        return next;
+      });
+    }
+
+    return { updated };
+  }, [appState, pushBackup, scheduleSync]);
+
   // ── CRUD mutations ─────────────────────────────────────────────────────────
 
   const addLocation = useCallback(
     (location: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>, options?: { source?: string }) => {
       const now = new Date().toISOString();
-      const newLocation: Location = { ...location, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
+      // Normalize city/state casing on the way in — "BENTONVILLE" and
+      // "Bentonville" need to be the exact same string, since the location
+      // tree groups locations by this value directly (see LocationTree.tsx).
+      const normalized: Omit<Location, 'id' | 'createdAt' | 'updatedAt'> = {
+        ...location,
+        city: titleCaseCity(location.city),
+        state: normalizeStateAbbr(location.state),
+      };
+      const newLocation: Location = { ...normalized, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
       const label = options?.source
         ? `Added "${newLocation.siteName}" (${options.source})`
         : `Added "${newLocation.siteName}"`;
@@ -466,6 +534,14 @@ export function useLocationStore() {
 
   const updateLocation = useCallback(
     (id: string, updates: Partial<Location>) => {
+      // Same normalization as addLocation — applied before diffing, so a
+      // save that only changes casing (or a form re-save where the fields
+      // already round-trip to the same normalized value) doesn't register
+      // as a spurious change.
+      const normalizedUpdates: Partial<Location> = { ...updates };
+      if (typeof updates.city === 'string') normalizedUpdates.city = titleCaseCity(updates.city);
+      if (typeof updates.state === 'string') normalizedUpdates.state = normalizeStateAbbr(updates.state);
+
       let savedLocation: Location | null = null;
 
       setAppState((prev) => {
@@ -473,13 +549,13 @@ export function useLocationStore() {
         if (!old) return prev;
 
         const diff: Record<string, { before: unknown; after: unknown }> = {};
-        (Object.keys(updates) as (keyof Location)[]).forEach((key) => {
-          if (updates[key] !== old[key]) diff[key] = { before: old[key], after: updates[key] };
+        (Object.keys(normalizedUpdates) as (keyof Location)[]).forEach((key) => {
+          if (normalizedUpdates[key] !== old[key]) diff[key] = { before: old[key], after: normalizedUpdates[key] };
         });
         if (Object.keys(diff).length === 0) return prev;
 
         pushBackup(`Edited "${old.siteName}"`, prev, id, old.siteName);
-        const updated: Location = { ...old, ...updates, updatedAt: new Date().toISOString() };
+        const updated: Location = { ...old, ...normalizedUpdates, updatedAt: new Date().toISOString() };
         savedLocation = updated;
         const auditEntry = createAuditEntry(id, 'update', diff, prev.currentUser);
         const next = {
@@ -803,6 +879,7 @@ export function useLocationStore() {
 
     lookup,
     backfillAddressesFromLookup,
+    fixCityStateCasing,
 
     addLocation,
     updateLocation,
